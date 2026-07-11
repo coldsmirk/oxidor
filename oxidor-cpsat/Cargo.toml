@@ -10,5 +10,12 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-oxidor-sys = { workspace = true }
 oxidor-protos = { workspace = true }
+oxidor-sys = { workspace = true, optional = true }
+libc = { version = "0.2", optional = true }
+
+[features]
+default = ["solve"]
+# Solving links the native OR-Tools library (see oxidor-sys). Without this
+# feature the crate is pure Rust: models can be built and serialized anywhere.
+solve = ["dep:oxidor-sys", "dep:libc"]
