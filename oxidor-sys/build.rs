@@ -25,10 +25,15 @@ fn main() {
     println!("cargo::rustc-link-search=native={}", lib_dir.display());
     if installation.static_bundle {
         // One merged archive (libortools.a) carrying OR-Tools and every
-        // vendored dependency; only the C++ runtime remains external.
+        // vendored dependency; only the C++ runtime and, on macOS, system
+        // frameworks remain external.
         println!("cargo::rustc-link-lib=static=ortools");
         match env::var("CARGO_CFG_TARGET_OS").as_deref() {
-            Ok("macos") => println!("cargo::rustc-link-lib=dylib=c++"),
+            Ok("macos") => {
+                println!("cargo::rustc-link-lib=dylib=c++");
+                // absl's time-zone lookup uses CoreFoundation.
+                println!("cargo::rustc-link-lib=framework=CoreFoundation");
+            }
             Ok("linux") => println!("cargo::rustc-link-lib=dylib=stdc++"),
             _ => {}
         }
@@ -214,7 +219,12 @@ mod prebuilt {
         };
 
         let cache_root = cache_directory();
-        let bundle_root = cache_root.join(format!("{RELEASE_TAG}-{target}"));
+        // The expected hash is part of the cache key, so republished bundles
+        // invalidate stale caches automatically.
+        let bundle_root = cache_root.join(format!(
+            "{RELEASE_TAG}-{target}-{}",
+            &expected_hash[..16.min(expected_hash.len())]
+        ));
         if bundle_root.join("lib").join("libortools.a").exists() {
             return bundle_root;
         }
