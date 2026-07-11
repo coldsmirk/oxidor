@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["oxidor", "oxidor-sys", "oxidor-protos", "oxidor-cpsat"]
+members = ["oxidor", "oxidor-sys", "oxidor-protos", "oxidor-cpsat", "xtask"]
 
 [workspace.package]
 version = "0.0.1"
@@ -14,4 +14,4 @@ categories = ["mathematics", "science", "api-bindings"]
 [workspace.dependencies]
 oxidor-sys = { version = "0.0.1", path = "oxidor-sys" }
 oxidor-protos = { version = "0.0.1", path = "oxidor-protos" }
-oxidor-cpsat = { version = "0.0.1", path = "oxidor-cpsat" }
+oxidor-cpsat = { version = "0.0.1", path = "oxidor-cpsat", default-features = false }
