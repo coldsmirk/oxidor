@@ -33,6 +33,18 @@ jobs:
           repository: google/or-tools
           ref: v9.15
 
+      - name: Force static dependency builds
+        # Upstream hard-codes shared libraries for every BUILD_DEPS
+        # dependency (cmake/dependencies/CMakeLists.txt); a static bundle
+        # needs them static, and there is no option for it.
+        run: |
+          sed -i.bak \
+            -e 's/set(BUILD_SHARED_LIBS ON)/set(BUILD_SHARED_LIBS OFF)/' \
+            -e 's/set(protobuf_BUILD_SHARED_LIBS ON)/set(protobuf_BUILD_SHARED_LIBS OFF)/' \
+            cmake/dependencies/CMakeLists.txt
+          rm cmake/dependencies/CMakeLists.txt.bak
+          grep -n 'BUILD_SHARED_LIBS OFF' cmake/dependencies/CMakeLists.txt
+
       - name: Configure (static, vendored dependencies)
         run: >
           cmake -S . -B build
