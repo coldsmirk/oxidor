@@ -1,0 +1,23 @@
+[package]
+name = "oxidor-routing"
+description = "Idiomatic Rust API for Google OR-Tools vehicle routing — TSP/VRP over a distance matrix (part of oxidor)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+oxidor-protos = { workspace = true }
+oxidor-sys = { workspace = true, optional = true, features = ["shim"] }
+libc = { version = "0.2", optional = true }
+
+[features]
+default = ["solve"]
+# Solving links the native OR-Tools library and compiles Oxidor's C++ shim
+# (routing has no upstream C API), which needs the OR-Tools headers and a
+# C++20 compiler. Without this feature the crate only defines the problem
+# types.
+solve = ["dep:oxidor-sys", "dep:libc"]
