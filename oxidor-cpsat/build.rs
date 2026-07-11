@@ -5,7 +5,7 @@ fn main() {
     // from an installation prefix. Emit run-time rpath flags so this crate's
     // tests, examples, and binaries locate the library without env vars.
     // Doctests cannot receive link args; keep doc examples `no_run`.
-    let Ok(root) = env::var("DEP_ORTOOLS_ROOT") else {
+    let Ok(lib_dir) = env::var("DEP_ORTOOLS_LIBDIR") else {
         return;
     };
     if matches!(
@@ -14,6 +14,6 @@ fn main() {
     ) {
         // Applies to every linked target of this package (tests, examples);
         // the per-kind variants are rejected for kinds the package lacks.
-        println!("cargo::rustc-link-arg=-Wl,-rpath,{root}/lib");
+        println!("cargo::rustc-link-arg=-Wl,-rpath,{lib_dir}");
     }
 }

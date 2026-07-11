@@ -5,13 +5,13 @@ fn main() {
     // from an installation prefix. Emit a run-time rpath so this crate's
     // linked binaries — including the merged doctest binary, which loads the
     // library even for `no_run` examples — can locate it.
-    let Ok(root) = env::var("DEP_ORTOOLS_ROOT") else {
+    let Ok(lib_dir) = env::var("DEP_ORTOOLS_LIBDIR") else {
         return;
     };
     if matches!(
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
         Ok("macos") | Ok("linux")
     ) {
-        println!("cargo::rustc-link-arg=-Wl,-rpath,{root}/lib");
+        println!("cargo::rustc-link-arg=-Wl,-rpath,{lib_dir}");
     }
 }

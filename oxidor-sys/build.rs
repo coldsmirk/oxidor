@@ -20,7 +20,7 @@ fn main() {
     }
 
     let installation = locate_installation();
-    let lib_dir = installation.root.join("lib");
+    let lib_dir = library_directory(&installation.root);
 
     println!("cargo::rustc-link-search=native={}", lib_dir.display());
     if installation.static_bundle {
@@ -67,6 +67,7 @@ fn main() {
         compile_shim(&installation, &lib_dir);
     }
 
+    println!("cargo::metadata=libdir={}", lib_dir.display());
     // Published to direct dependents as DEP_ORTOOLS_ROOT (via `links =
     // "ortools"`), so they can emit run-time rpath flags for their binaries
     // (harmless for the static bundle, which needs no rpath).
@@ -79,7 +80,7 @@ fn locate_installation() -> Installation {
     // variable would otherwise be injected (e.g. .cargo/config.toml).
     if let Some(prefix) = env::var_os("ORTOOLS_PREFIX").filter(|value| !value.is_empty()) {
         let root = PathBuf::from(prefix);
-        let lib_file = root.join("lib").join(shared_library_name());
+        let lib_file = library_directory(&root).join(shared_library_name());
         if !lib_file.exists() {
             die_with_help(&format!("{} does not exist", lib_file.display()));
         }
@@ -179,6 +180,17 @@ fn shim_native_dependencies(lib_dir: &Path) -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+/// `lib64/` on RHEL-family layouts (e.g. the official AlmaLinux archives),
+/// `lib/` everywhere else.
+fn library_directory(root: &Path) -> PathBuf {
+    let lib64 = root.join("lib64");
+    if lib64.exists() {
+        lib64
+    } else {
+        root.join("lib")
+    }
 }
 
 fn shared_library_name() -> &'static str {
