@@ -15,10 +15,17 @@ architecture and setup.
 ## Design invariants
 
 - **The FFI boundary is serialized protos only.** Models cross into the
-  native library as `CpModelProto` bytes through the official C API
-  (`ortools/sat/c_api/cp_solver_c.h`, declared in `oxidor-sys`); responses
-  come back as `CpSolverResponse` bytes. No C++ type ever surfaces in any
-  public API. Buffers returned by the C API are freed with the C allocator.
+  native library as proto bytes through the official C APIs — CP-SAT
+  (`ortools/sat/c_api/cp_solver_c.h`) and MathOpt
+  (`ortools/math_opt/core/c_api/solver.h`), both declared in `oxidor-sys` —
+  and results come back as proto bytes. No C++ type ever surfaces in any
+  public API. CP-SAT buffers are freed with the C allocator (`libc::free`);
+  MathOpt buffers with `MathOptFree`.
+- **C++ exceptions cannot cross the boundary.** A thrown exception aborts the
+  process (seen with MathOpt solver types whose backend isn't linked). Never
+  add an API whose misuse triggers one when a clean status path exists;
+  document the hazard when upstream leaves no choice (see
+  `SolverType`'s docs).
 - **Generated proto code is committed.** `oxidor-protos/src/generated/` is
   produced offline by `xtask gen-protos` (protox, no `protoc`) from the
   vendored `.proto` files of a pinned OR-Tools release. Users never need
@@ -32,11 +39,11 @@ architecture and setup.
   instead of shifting, matching the C++ CpModelBuilder.
 - **Only `oxidor-sys` links OR-Tools** (`links = "ortools"`). It publishes
   the install prefix to *direct* dependents as `DEP_ORTOOLS_ROOT`, and each
-  crate whose binaries load the library (`oxidor-cpsat`, the umbrella)
-  declares a direct `oxidor-sys` dependency plus a build script turning that
-  into an rpath link arg. This covers tests, examples, and doctests — the
-  edition-2024 merged doctest binary loads the library even for `no_run`
-  examples.
+  crate whose binaries load the library (`oxidor-cpsat`, `oxidor-mathopt`,
+  the umbrella) declares a direct `oxidor-sys` dependency plus a build script
+  turning that into an rpath link arg. This covers tests, examples, and
+  doctests — the edition-2024 merged doctest binary loads the library even
+  for `no_run` examples.
 - **Statuses are outcomes, not errors.** Infeasible/Unknown are values of
   `SolveStatus`; `solution()` returns `Option`. No panics in the public API
   apart from documented programmer errors (e.g. mismatched slice lengths).

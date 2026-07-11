@@ -46,12 +46,35 @@ For a real scheduling model — nurses, days, shifts, even workloads — see
 cargo run -p oxidor-cpsat --example nurse_scheduling
 ```
 
+Linear and mixed-integer programming go through MathOpt, with the solver
+chosen per call (Glop, SCIP, CP-SAT, and PDLP ship in the official archives):
+
+```rust
+use oxidor::mathopt::{Model, SolverType};
+
+let mut model = Model::new();
+let x = model.add_continuous_variable(0.0..=10.0);
+let y = model.add_continuous_variable(0.0..=10.0);
+model.add_less_or_equal(x + y, 14.0);
+model.maximize(2.0 * x + 3.0 * y);
+
+let result = model.solve(SolverType::Glop)?;
+if let Some(solution) = result.primal_solution() {
+    println!("x = {}, y = {}", solution.value(x), solution.value(y));
+}
+```
+
+Long solves can be stopped from another thread — CP-SAT via `StopToken`,
+MathOpt via `SolveInterrupter` — and CP-SAT can enumerate a model's full
+solution set (`SolveResponse::solutions()`).
+
 ## Workspace layout
 
 | Crate | Role |
 |---|---|
 | [`oxidor`](oxidor/) | Umbrella crate: re-exports the per-solver APIs behind feature flags |
 | [`oxidor-cpsat`](oxidor-cpsat/) | Idiomatic API for the CP-SAT constraint programming solver |
+| [`oxidor-mathopt`](oxidor-mathopt/) | Idiomatic API for MathOpt: LP/MIP over Glop, SCIP, CP-SAT, PDLP |
 | [`oxidor-protos`](oxidor-protos/) | Generated protobuf model types (pure Rust, committed to the repo) |
 | [`oxidor-sys`](oxidor-sys/) | Native library location, linkage, and raw `extern "C"` declarations |
 | [`xtask`](xtask/) | Maintainer tasks (`cargo run -p xtask -- gen-protos`); not published |
@@ -75,13 +98,15 @@ the output is committed.
 
 ## Roadmap
 
-1. **CP-SAT** — ✅ model builder + solve over the official `cp_solver_c.h` C
-   API; next: interruptible solves, solution callbacks (which the official Go
-   bindings lack), prebuilt static libraries so `cargo add oxidor` needs no
-   setup at all.
-2. **Linear solving** — MathOpt / linear solver protos.
+1. **CP-SAT** — ✅ model builder, solve, interruptible solve (`StopToken`),
+   solution enumeration; next: streaming solution callbacks (needs a small
+   C++ shim; the official Go bindings lack them too).
+2. **Linear solving (MathOpt)** — ✅ LP/MIP model builder, per-call solver
+   choice (Glop / SCIP / CP-SAT / PDLP), interruption, clean error paths.
 3. **Routing (VRP/TSP)** — `cxx` bridge over the imperative C++ API.
 4. Graph algorithms, knapsack, and the remaining modules.
+5. **Distribution** — prebuilt static libraries so `cargo add oxidor` needs
+   no setup at all.
 
 ## License
 
