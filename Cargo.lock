@@ -262,6 +262,7 @@ name = "oxidor"
 version = "0.0.1"
 dependencies = [
  "oxidor-cpsat",
+ "oxidor-mathopt",
  "oxidor-sys",
 ]
 
@@ -275,10 +276,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxidor-mathopt"
+version = "0.0.1"
+dependencies = [
+ "oxidor-protos",
+ "oxidor-sys",
+]
+
+[[package]]
 name = "oxidor-protos"
 version = "0.0.1"
 dependencies = [
  "prost",
+ "prost-types",
 ]
 
 [[package]]

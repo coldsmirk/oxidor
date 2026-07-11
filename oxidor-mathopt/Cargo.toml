@@ -1,0 +1,20 @@
+[package]
+name = "oxidor-mathopt"
+description = "Idiomatic Rust API for Google OR-Tools MathOpt — LP and MIP solving (part of oxidor)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+oxidor-protos = { workspace = true }
+oxidor-sys = { workspace = true, optional = true }
+
+[features]
+default = ["solve"]
+# Solving links the native OR-Tools library (see oxidor-sys). Without this
+# feature the crate is pure Rust: models can be built and serialized anywhere.
+solve = ["dep:oxidor-sys"]
