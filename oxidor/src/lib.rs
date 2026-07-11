@@ -46,10 +46,13 @@
 //!
 //! - `cpsat` *(default)* — the CP-SAT API, [`cpsat`](mod@cpsat).
 //! - `mathopt` *(default)* — the LP/MIP API, [`mathopt`](mod@mathopt).
+//! - `routing` — TSP/VRP over a distance matrix, [`routing`](mod@routing).
+//!   Solving compiles Oxidor's C++ shim (needs the OR-Tools headers and a
+//!   C++20 compiler), so it is not in the default set.
+//! - `algorithms` — knapsack, max flow, min cost flow,
+//!   [`algorithms`](mod@algorithms). Same shim requirement as `routing`.
 //! - `solve` *(default)* — links the native OR-Tools library. Disable to
 //!   build and serialize models on platforms without it.
-//!
-//! Planned: routing (VRP/TSP), graph algorithms.
 
 #![warn(missing_docs)]
 
@@ -58,6 +61,12 @@ pub use oxidor_cpsat as cpsat;
 
 #[cfg(feature = "mathopt")]
 pub use oxidor_mathopt as mathopt;
+
+#[cfg(feature = "routing")]
+pub use oxidor_routing as routing;
+
+#[cfg(feature = "algorithms")]
+pub use oxidor_algorithms as algorithms;
 
 #[cfg(feature = "cpsat")]
 pub use oxidor_cpsat::{

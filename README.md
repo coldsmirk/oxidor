@@ -68,6 +68,26 @@ Long solves can be stopped from another thread — CP-SAT via `StopToken`,
 MathOpt via `SolveInterrupter` — and CP-SAT can enumerate a model's full
 solution set (`SolveResponse::solutions()`).
 
+Vehicle routing (TSP/VRP, `routing` feature) works over a distance matrix,
+and the classic algorithms (`algorithms` feature) come as plain calls:
+
+```rust
+use oxidor::routing::RoutingProblem;
+use oxidor::algorithms::solve_knapsack;
+
+let tour = RoutingProblem::from_matrix(matrix)?
+    .with_vehicles(2)
+    .with_capacities(demands, capacities)
+    .solve()?;
+
+let packing = solve_knapsack(&[60, 100, 120], &[10, 20, 30], 50)?;
+```
+
+These two features compile Oxidor's own small C++ shim (routing and the
+algorithm classes have no upstream C API), which needs the OR-Tools headers
+and a C++20 compiler — hence they are opt-in rather than default. Every shim
+entry point catches C++ exceptions; they never cross into Rust.
+
 ## Workspace layout
 
 | Crate | Role |
@@ -75,8 +95,10 @@ solution set (`SolveResponse::solutions()`).
 | [`oxidor`](oxidor/) | Umbrella crate: re-exports the per-solver APIs behind feature flags |
 | [`oxidor-cpsat`](oxidor-cpsat/) | Idiomatic API for the CP-SAT constraint programming solver |
 | [`oxidor-mathopt`](oxidor-mathopt/) | Idiomatic API for MathOpt: LP/MIP over Glop, SCIP, CP-SAT, PDLP |
+| [`oxidor-routing`](oxidor-routing/) | TSP / capacitated VRP over a distance matrix |
+| [`oxidor-algorithms`](oxidor-algorithms/) | Knapsack, max flow, min cost flow |
 | [`oxidor-protos`](oxidor-protos/) | Generated protobuf model types (pure Rust, committed to the repo) |
-| [`oxidor-sys`](oxidor-sys/) | Native library location, linkage, and raw `extern "C"` declarations |
+| [`oxidor-sys`](oxidor-sys/) | Native library location, linkage, raw FFI, and the C++ shim |
 | [`xtask`](xtask/) | Maintainer tasks (`cargo run -p xtask -- gen-protos`); not published |
 
 ## Development
@@ -99,14 +121,18 @@ the output is committed.
 ## Roadmap
 
 1. **CP-SAT** — ✅ model builder, solve, interruptible solve (`StopToken`),
-   solution enumeration; next: streaming solution callbacks (needs a small
-   C++ shim; the official Go bindings lack them too).
+   solution enumeration; next: streaming solution callbacks (via the shim).
 2. **Linear solving (MathOpt)** — ✅ LP/MIP model builder, per-call solver
    choice (Glop / SCIP / CP-SAT / PDLP), interruption, clean error paths.
-3. **Routing (VRP/TSP)** — `cxx` bridge over the imperative C++ API.
-4. Graph algorithms, knapsack, and the remaining modules.
-5. **Distribution** — prebuilt static libraries so `cargo add oxidor` needs
-   no setup at all.
+3. **Routing (VRP/TSP)** — ✅ v1: TSP and capacitated VRP over a distance
+   matrix through Oxidor's C++ shim; search parameters as protos. Next:
+   time windows, pickups/deliveries, Rust transit callbacks.
+4. **Algorithms** — ✅ knapsack (multi-dimensional branch and bound), max
+   flow, min cost flow.
+5. **Distribution** — CI test matrix ✅; a `prebuilt-ortools` workflow builds
+   static libraries per platform, and a `download-prebuilt` mode in
+   `oxidor-sys` will consume them (with checksums) once published — the goal
+   is `cargo add oxidor` with no setup at all.
 
 ## License
 

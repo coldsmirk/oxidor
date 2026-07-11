@@ -17,6 +17,8 @@ test = false
 [dependencies]
 oxidor-cpsat = { workspace = true, optional = true }
 oxidor-mathopt = { workspace = true, optional = true }
+oxidor-routing = { workspace = true, optional = true }
+oxidor-algorithms = { workspace = true, optional = true }
 # Direct dependency so build.rs receives DEP_ORTOOLS_ROOT for the doctest
 # rpath (the metadata of a `links` crate reaches direct dependents only).
 oxidor-sys = { workspace = true, optional = true }
@@ -27,6 +29,12 @@ default = ["cpsat", "mathopt", "solve"]
 cpsat = ["dep:oxidor-cpsat"]
 # The MathOpt LP/MIP solving API.
 mathopt = ["dep:oxidor-mathopt"]
+# Vehicle routing (TSP/VRP). Not in the default set: solving compiles
+# Oxidor's C++ shim, which needs the OR-Tools headers and a C++20 compiler.
+routing = ["dep:oxidor-routing"]
+# Knapsack, max flow, min cost flow. Same C++ shim requirement as `routing`,
+# and no pure-model subset — enabling this always links.
+algorithms = ["dep:oxidor-algorithms"]
 # Link the native OR-Tools library. Without it, models can be built and
 # serialized but not solved locally.
-solve = ["oxidor-cpsat?/solve", "oxidor-mathopt?/solve", "dep:oxidor-sys"]
+solve = ["oxidor-cpsat?/solve", "oxidor-mathopt?/solve", "oxidor-routing?/solve", "dep:oxidor-sys"]

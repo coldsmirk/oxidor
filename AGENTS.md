@@ -6,7 +6,9 @@ architecture and setup.
 ## Commands
 
 - Test: `cargo test --workspace` (needs `.ortools/v9.15` — see README
-  *Development*; `.cargo/config.toml` points `ORTOOLS_PREFIX` at it)
+  *Development*; `.cargo/config.toml` points `ORTOOLS_PREFIX` at it; the
+  routing/algorithms crates compile the C++ shim, so a C++20 compiler is
+  required too)
 - Lint: `cargo clippy --workspace --all-targets` (keep it warning-clean) and
   `cargo fmt --all --check`
 - Regenerate protos: `cargo run -p xtask -- gen-protos` (commit the output)
@@ -26,6 +28,17 @@ architecture and setup.
   add an API whose misuse triggers one when a clean status path exists;
   document the hazard when upstream leaves no choice (see
   `SolverType`'s docs).
+- **The shim owns the C boundary for callback-free bridging.** APIs without
+  an upstream C API (routing, knapsack, flows) go through
+  `oxidor-sys/cpp/oxidor_shim.cc`, compiled under the sys `shim` feature
+  against the installation's headers (with the compile definitions the
+  official CMake config exports — see build.rs). Shim rules: POD arrays and
+  serialized protos only; every entry point wrapped in try/catch; outputs
+  malloc-allocated and freed by the Rust side with `libc::free`. A new entry
+  point means updating the `.cc`, the `#[cfg(feature = "shim")]` decls in
+  sys, and this file together. The shim also links the unversioned
+  absl/protobuf shared libraries next to libortools (inlined template code;
+  the linker won't resolve those transitively).
 - **Generated proto code is committed.** `oxidor-protos/src/generated/` is
   produced offline by `xtask gen-protos` (protox, no `protoc`) from the
   vendored `.proto` files of a pinned OR-Tools release. Users never need
