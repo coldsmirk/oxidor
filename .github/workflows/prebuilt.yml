@@ -72,7 +72,9 @@ jobs:
           for archive in "$libdir"/*.a; do
             cp "$archive" "merged_inputs/$(basename "$archive")"
           done
-          find build/_deps -name '*.a' | while read -r archive; do
+          # Dependency archives land in build/lib (the archive output
+          # directory), not under _deps; sweep the whole build tree.
+          find build -name '*.a' -not -path '*CMakeFiles*' | while read -r archive; do
             base=$(basename "$archive")
             [ -e "merged_inputs/$base" ] || cp "$archive" "merged_inputs/$base"
           done
