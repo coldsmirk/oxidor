@@ -11,3 +11,12 @@ categories.workspace = true
 links = "ortools"
 
 [dependencies]
+
+[build-dependencies]
+cc = "1"
+
+[features]
+# Compiles cpp/oxidor_shim.cc — Oxidor's own C bridge for OR-Tools APIs that
+# ship no upstream C API (routing, algorithms). Needs the OR-Tools headers
+# next to the library and a C++20 compiler.
+shim = []

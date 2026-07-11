@@ -155,3 +155,103 @@ unsafe extern "C" {
     /// `ptr` must originate from the MathOpt C API and not be freed twice.
     pub fn MathOptFree(ptr: *mut c_void);
 }
+
+// Oxidor's own C shim (`cpp/oxidor_shim.cc`, compiled under the `shim`
+// feature) for OR-Tools APIs without an upstream C API.
+#[cfg(feature = "shim")]
+unsafe extern "C" {
+    /// Solves a vehicle routing problem over a dense arc-cost matrix.
+    ///
+    /// `matrix` is row-major with `num_nodes²` entries. `demands` (length
+    /// `num_nodes`) and `vehicle_capacities` (length `num_vehicles`) are
+    /// either both non-null (adds a capacity dimension) or both null.
+    /// `params_bytes` is a serialized `RoutingSearchParameters` merged over
+    /// the defaults, or null.
+    ///
+    /// On success returns a `malloc`-allocated i64 buffer of `*out_len`
+    /// entries laid out as `[status, objective, num_routes, route_len,
+    /// nodes…, route_len, …]`; routes exclude the depot endpoints. On failure
+    /// returns null and sets `*error_message` (`malloc`-allocated).
+    ///
+    /// # Safety
+    ///
+    /// Input arrays must be valid for the stated lengths; output locations
+    /// must be valid for writes. The caller owns the returned buffer and
+    /// `*error_message`, releasing both with the C allocator's `free`.
+    pub fn OxidorRoutingSolveMatrix(
+        num_nodes: i32,
+        num_vehicles: i32,
+        depot: i32,
+        matrix: *const i64,
+        demands: *const i64,
+        vehicle_capacities: *const i64,
+        params_bytes: *const c_void,
+        params_len: i32,
+        out_len: *mut i32,
+        error_message: *mut *mut c_char,
+    ) -> *mut i64;
+}
+
+#[cfg(feature = "shim")]
+unsafe extern "C" {
+    /// Solves a (multi-dimensional) 0-1 knapsack with branch and bound.
+    ///
+    /// `weights` is row-major `num_dims × num_items`; `capacities` has
+    /// `num_dims` entries. Writes the best value and 0/1 selection flags
+    /// (length `num_items`). Returns 0 on success; nonzero on failure with
+    /// `*error_message` set (`malloc`-allocated).
+    ///
+    /// # Safety
+    ///
+    /// Arrays must be valid for the stated lengths; `out_selected` must be
+    /// writable for `num_items` bytes. The caller frees `*error_message`.
+    pub fn OxidorKnapsackSolve(
+        profits: *const i64,
+        num_items: i32,
+        weights: *const i64,
+        capacities: *const i64,
+        num_dims: i32,
+        out_best_value: *mut i64,
+        out_selected: *mut u8,
+        error_message: *mut *mut c_char,
+    ) -> i32;
+
+    /// Computes a maximum flow; returns the `SimpleMaxFlow` status
+    /// (0 = OPTIMAL) or -1 on a caught C++ exception.
+    ///
+    /// # Safety
+    ///
+    /// Arc arrays and `out_flows` must be valid for `num_arcs` entries; the
+    /// caller frees `*error_message`.
+    pub fn OxidorMaxFlowSolve(
+        tails: *const i32,
+        heads: *const i32,
+        capacities: *const i64,
+        num_arcs: i32,
+        source: i32,
+        sink: i32,
+        out_flows: *mut i64,
+        out_max_flow: *mut i64,
+        error_message: *mut *mut c_char,
+    ) -> i32;
+
+    /// Computes a minimum-cost flow; returns the `SimpleMinCostFlow` status
+    /// (1 = OPTIMAL) or -1 on a caught C++ exception.
+    ///
+    /// # Safety
+    ///
+    /// Arc arrays and `out_flows` must be valid for `num_arcs` entries and
+    /// `supplies` for `num_nodes`; the caller frees `*error_message`.
+    pub fn OxidorMinCostFlowSolve(
+        tails: *const i32,
+        heads: *const i32,
+        capacities: *const i64,
+        unit_costs: *const i64,
+        num_arcs: i32,
+        supplies: *const i64,
+        num_nodes: i32,
+        out_flows: *mut i64,
+        out_total_cost: *mut i64,
+        error_message: *mut *mut c_char,
+    ) -> i32;
+}
