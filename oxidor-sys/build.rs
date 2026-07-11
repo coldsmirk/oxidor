@@ -27,7 +27,18 @@ fn main() {
         // One merged archive (libortools.a) carrying OR-Tools and every
         // vendored dependency; only the C++ runtime and, on macOS, system
         // frameworks remain external.
-        println!("cargo::rustc-link-lib=static=ortools");
+        //
+        // Known limitation: MathOpt registers its solvers through global
+        // initializers, which a selective archive pull drops — MathOpt
+        // solves return a clean "solver type … is not registered" error
+        // under this mode. Use ORTOOLS_PREFIX with an official archive for
+        // MathOpt.
+        //
+        // `-bundle`: keep the (huge) archive out of the rlib and hand it to
+        // the final linker directly — the linker's demand-driven member
+        // resolution then works across the whole archive (rlib-bundled
+        // members failed to resolve intra-archive references like bzlib).
+        println!("cargo::rustc-link-lib=static:-bundle=ortools");
         match env::var("CARGO_CFG_TARGET_OS").as_deref() {
             Ok("macos") => {
                 println!("cargo::rustc-link-lib=dylib=c++");

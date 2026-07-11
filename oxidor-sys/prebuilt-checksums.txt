@@ -1,3 +1,6 @@
 # SHA-256 checksums of the prebuilt static OR-Tools bundles attached to the
 # GitHub release named in build.rs (RELEASE_TAG), one "<target> <hex>" per
 # line. Regenerate when republishing bundles.
+aarch64-apple-darwin 8e7f20a18f0988480d5a245baed61b8c97eb982ea17a63ec6289888aae8aef42
+aarch64-unknown-linux-gnu 0c84cf854c55cc7037f6c3aada00b839c0bfbce849d4f09790f1f8679a6d2b7f
+x86_64-unknown-linux-gnu cb11f09a1e0e607f80e230d629782fb5130204b2ef0239f72f36cec5f2865f37

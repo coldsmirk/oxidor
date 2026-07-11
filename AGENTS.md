@@ -64,6 +64,17 @@ architecture and setup.
   crates; doc examples that solve are runnable in this repo (kept `no_run`
   only where they'd mislead users without the native library).
 
+- **Prebuilt bundles are release assets with pinned checksums.** The
+  `prebuilt-ortools` workflow (manual dispatch) builds static OR-Tools per
+  platform — patching upstream's hard-coded shared dependency builds and
+  vendoring bzip2 — and merges everything into one `libortools.a`. Publishing
+  = upload the artifacts to the `ortools-v9.15` release and regenerate
+  `oxidor-sys/prebuilt-checksums.txt`; the checksum is part of the local
+  cache key, so republished bundles invalidate stale caches. Known
+  limitation: MathOpt's solver registry (global initializers) does not
+  survive selective static linking — `download-prebuilt` covers CP-SAT,
+  routing, and algorithms; MathOpt needs `ORTOOLS_PREFIX`.
+
 ## Collateral steps for a change
 
 - Bumping the OR-Tools version → re-vendor `.proto` files, run

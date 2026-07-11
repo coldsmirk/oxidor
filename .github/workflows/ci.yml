@@ -18,6 +18,9 @@ jobs:
         include:
           - os: ubuntu-24.04
             archive: or-tools_amd64_ubuntu-24.04_cpp_v9.15.6755.tar.gz
+          - os: ubuntu-24.04-arm
+            # Built on an older glibc; forward-compatible on 24.04.
+            archive: or-tools_aarch64_AlmaLinux-8.10_cpp_v9.15.6755.tar.gz
           - os: macos-latest
             archive: or-tools_arm64_macOS-26.2_cpp_v9.15.6755.tar.gz
     steps:
@@ -57,3 +60,10 @@ jobs:
         run: cargo check -p oxidor --no-default-features --features cpsat,mathopt
         env:
           ORTOOLS_PREFIX: /nonexistent
+
+      - name: End-to-end download-prebuilt (static bundle from our release)
+        # Empty ORTOOLS_PREFIX forces the download path; this exercises the
+        # real release asset, the SHA-256 gate, and static linking.
+        run: cargo test -p oxidor-cpsat --features oxidor-sys/download-prebuilt --test solve
+        env:
+          ORTOOLS_PREFIX: ""

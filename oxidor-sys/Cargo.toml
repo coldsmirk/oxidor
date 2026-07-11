@@ -27,4 +27,7 @@ shim = []
 # When ORTOOLS_PREFIX is not set, download a static OR-Tools bundle built by
 # this project's CI from its GitHub releases (SHA-256 verified, cached under
 # ~/.cache/oxidor) and link it statically — no local OR-Tools setup needed.
+# Covers CP-SAT, routing, and the algorithms; MathOpt needs ORTOOLS_PREFIX
+# (its solver registry relies on global initializers a selective static pull
+# drops — see build.rs).
 download-prebuilt = ["dep:ureq", "dep:sha2", "dep:flate2", "dep:tar"]

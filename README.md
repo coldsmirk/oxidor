@@ -34,10 +34,18 @@ if let Some(solution) = response.solution() {
 }
 ```
 
-Solving needs the OR-Tools native library: download an official [C++ release
-archive](https://github.com/google/or-tools/releases) for your platform,
-extract it, and set `ORTOOLS_PREFIX` to the extracted directory. Model
-building alone (`default-features = false`) is pure Rust and needs nothing.
+Solving needs the OR-Tools native library, obtained one of three ways:
+
+- **`download-prebuilt` feature** — fetches a static OR-Tools bundle built by
+  this project's CI from its GitHub releases (SHA-256 verified, cached under
+  `~/.cache/oxidor`) and links it statically: no local setup, self-contained
+  binaries. Covers CP-SAT, routing, and the algorithms; MathOpt's solver
+  registry needs the dynamic library, so use `ORTOOLS_PREFIX` for it.
+- **`ORTOOLS_PREFIX`** — point it at an extracted official [C++ release
+  archive](https://github.com/google/or-tools/releases) (dynamic linking, all
+  solvers; always wins when set).
+- **Model building alone** (`default-features = false`) — pure Rust, needs
+  nothing.
 
 For a real scheduling model — nurses, days, shifts, even workloads — see
 [`oxidor-cpsat/examples/nurse_scheduling.rs`](oxidor-cpsat/examples/nurse_scheduling.rs):
