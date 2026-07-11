@@ -1,0 +1,13 @@
+[package]
+name = "oxidor-sys"
+description = "Native library linkage and raw FFI for Google OR-Tools (part of oxidor)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+links = "ortools"
+
+[dependencies]

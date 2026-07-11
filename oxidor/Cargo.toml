@@ -1,0 +1,17 @@
+[package]
+name = "oxidor"
+description = "Unofficial Rust bindings for Google OR-Tools — umbrella crate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+oxidor-cpsat = { workspace = true, optional = true }
+
+[features]
+default = ["cpsat"]
+cpsat = ["dep:oxidor-cpsat"]

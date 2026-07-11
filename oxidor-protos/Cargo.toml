@@ -1,0 +1,12 @@
+[package]
+name = "oxidor-protos"
+description = "Generated protobuf model types for Google OR-Tools (part of oxidor)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
