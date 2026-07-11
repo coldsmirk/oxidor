@@ -1,0 +1,5 @@
+# Developer defaults for this workspace. The entry yields to a real
+# environment variable of the same name, so CI and power users can point
+# elsewhere. See README "Development" for the .ortools setup.
+[env]
+ORTOOLS_PREFIX = { value = ".ortools/v9.15", relative = true }
