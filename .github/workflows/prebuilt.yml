@@ -43,7 +43,12 @@ jobs:
             -e 's/set(protobuf_BUILD_SHARED_LIBS ON)/set(protobuf_BUILD_SHARED_LIBS OFF)/' \
             cmake/dependencies/CMakeLists.txt
           rm cmake/dependencies/CMakeLists.txt.bak
-          grep -n 'BUILD_SHARED_LIBS OFF' cmake/dependencies/CMakeLists.txt
+          # bzip2 has its own switches and defaults to shared-only; add the
+          # static target alongside (the shared one keeps or-tools's target
+          # graph intact).
+          perl -pi -e 's/set\(ENABLE_LIB_ONLY ON\)/set(ENABLE_LIB_ONLY ON)\n  set(ENABLE_STATIC_LIB ON)/' \
+            cmake/dependencies/CMakeLists.txt
+          grep -n 'BUILD_SHARED_LIBS OFF\|ENABLE_STATIC_LIB' cmake/dependencies/CMakeLists.txt
 
       - name: Configure (static, vendored dependencies)
         run: >
