@@ -14,9 +14,17 @@ links = "ortools"
 
 [build-dependencies]
 cc = "1"
+flate2 = { version = "1.1.9", optional = true }
+sha2 = { version = "0.11.0", optional = true }
+tar = { version = "0.4.46", optional = true }
+ureq = { version = "2", optional = true }
 
 [features]
 # Compiles cpp/oxidor_shim.cc — Oxidor's own C bridge for OR-Tools APIs that
 # ship no upstream C API (routing, algorithms). Needs the OR-Tools headers
 # next to the library and a C++20 compiler.
 shim = []
+# When ORTOOLS_PREFIX is not set, download a static OR-Tools bundle built by
+# this project's CI from its GitHub releases (SHA-256 verified, cached under
+# ~/.cache/oxidor) and link it statically — no local OR-Tools setup needed.
+download-prebuilt = ["dep:ureq", "dep:sha2", "dep:flate2", "dep:tar"]

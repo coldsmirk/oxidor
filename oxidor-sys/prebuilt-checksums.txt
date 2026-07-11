@@ -1,0 +1,3 @@
+# SHA-256 checksums of the prebuilt static OR-Tools bundles attached to the
+# GitHub release named in build.rs (RELEASE_TAG), one "<target> <hex>" per
+# line. Regenerate when republishing bundles.

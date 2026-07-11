@@ -48,9 +48,25 @@ jobs:
       - name: Build and install
         run: cmake --build build --config Release -j 4 --target install
 
+      - name: Merge every static library into one bundle
+        run: |
+          libdir=prefix/lib; [ -d prefix/lib64 ] && libdir=prefix/lib64
+          mkdir -p bundle/lib
+          cp -R prefix/include bundle/include
+          if [ "$(uname)" = "Darwin" ]; then
+            libtool -static -o bundle/lib/libortools.a "$libdir"/*.a
+          else
+            {
+              echo "create bundle/lib/libortools.a"
+              for archive in "$libdir"/*.a; do echo "addlib $archive"; done
+              echo "save"
+              echo "end"
+            } | ar -M
+          fi
+
       - name: Package
         run: |
-          tar czf "oxidor-ortools-${ORTOOLS_TAG}-${{ matrix.target }}.tar.gz" -C prefix .
+          tar czf "oxidor-ortools-${ORTOOLS_TAG}-${{ matrix.target }}.tar.gz" -C bundle .
           shasum -a 256 "oxidor-ortools-${ORTOOLS_TAG}-${{ matrix.target }}.tar.gz" \
             > "oxidor-ortools-${ORTOOLS_TAG}-${{ matrix.target }}.tar.gz.sha256"
 

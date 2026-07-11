@@ -1,5 +1,14 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// How the OR-Tools native library is obtained and linked.
+struct Installation {
+    /// Directory holding `lib/` and `include/`.
+    root: PathBuf,
+    /// True for the prebuilt single-archive bundle, false for a shared
+    /// library installation.
+    static_bundle: bool,
+}
 
 fn main() {
     println!("cargo::rerun-if-env-changed=ORTOOLS_PREFIX");
@@ -10,86 +19,128 @@ fn main() {
         return;
     }
 
-    let prefix = match env::var_os("ORTOOLS_PREFIX") {
-        Some(path) => PathBuf::from(path),
-        None => die_with_help("the ORTOOLS_PREFIX environment variable is not set"),
-    };
-    let lib_dir = prefix.join("lib");
-    let lib_file = lib_dir.join(shared_library_name());
-    if !lib_file.exists() {
-        die_with_help(&format!("{} does not exist", lib_file.display()));
-    }
+    let installation = locate_installation();
+    let lib_dir = installation.root.join("lib");
 
     println!("cargo::rustc-link-search=native={}", lib_dir.display());
-    println!("cargo::rustc-link-lib=dylib=ortools");
+    if installation.static_bundle {
+        // One merged archive (libortools.a) carrying OR-Tools and every
+        // vendored dependency; only the C++ runtime remains external.
+        println!("cargo::rustc-link-lib=static=ortools");
+        match env::var("CARGO_CFG_TARGET_OS").as_deref() {
+            Ok("macos") => println!("cargo::rustc-link-lib=dylib=c++"),
+            Ok("linux") => println!("cargo::rustc-link-lib=dylib=stdc++"),
+            _ => {}
+        }
+    } else {
+        println!("cargo::rustc-link-lib=dylib=ortools");
+        // Run-time rpath for this package's own test binaries; link args do
+        // not propagate to dependents.
+        if matches!(
+            env::var("CARGO_CFG_TARGET_OS").as_deref(),
+            Ok("macos") | Ok("linux")
+        ) {
+            println!("cargo::rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+        }
+    }
+
     // The `shim` feature compiles our own C bridge (cpp/oxidor_shim.cc) for
     // OR-Tools APIs without an upstream C API; it needs the headers the
     // installation ships next to the library.
     if env::var_os("CARGO_FEATURE_SHIM").is_some() {
-        let include_dir = prefix.join("include");
-        if !include_dir.exists() {
-            die_with_help(&format!(
-                "the `shim` feature needs OR-Tools headers, but {} does not exist",
-                include_dir.display()
-            ));
+        compile_shim(&installation, &lib_dir);
+    }
+
+    // Published to direct dependents as DEP_ORTOOLS_ROOT (via `links =
+    // "ortools"`), so they can emit run-time rpath flags for their binaries
+    // (harmless for the static bundle, which needs no rpath).
+    println!("cargo::metadata=root={}", installation.root.display());
+}
+
+fn locate_installation() -> Installation {
+    // An explicitly configured installation always wins; empty counts as
+    // unset so the prebuilt path can be forced in an environment where the
+    // variable would otherwise be injected (e.g. .cargo/config.toml).
+    if let Some(prefix) = env::var_os("ORTOOLS_PREFIX").filter(|value| !value.is_empty()) {
+        let root = PathBuf::from(prefix);
+        let lib_file = root.join("lib").join(shared_library_name());
+        if !lib_file.exists() {
+            die_with_help(&format!("{} does not exist", lib_file.display()));
         }
-        println!("cargo::rerun-if-changed=cpp/oxidor_shim.cc");
+        return Installation {
+            root,
+            static_bundle: false,
+        };
+    }
+
+    #[cfg(feature = "download-prebuilt")]
+    {
+        return Installation {
+            root: prebuilt::obtain(),
+            static_bundle: true,
+        };
+    }
+
+    #[cfg(not(feature = "download-prebuilt"))]
+    die_with_help("the ORTOOLS_PREFIX environment variable is not set");
+}
+
+fn compile_shim(installation: &Installation, lib_dir: &Path) {
+    let include_dir = installation.root.join("include");
+    if !include_dir.exists() {
+        die_with_help(&format!(
+            "the `shim` feature needs OR-Tools headers, but {} does not exist",
+            include_dir.display()
+        ));
+    }
+    if !installation.static_bundle {
         // The shim inlines absl/protobuf template code whose out-of-line
         // symbols live in the dependency libraries shipped next to
-        // libortools; the linker does not resolve those transitively.
-        for dependency in shim_native_dependencies(&lib_dir) {
+        // libortools; the linker does not resolve those transitively. (The
+        // static bundle already contains them.)
+        for dependency in shim_native_dependencies(lib_dir) {
             println!("cargo::rustc-link-lib=dylib={dependency}");
         }
-        let mut shim = cc::Build::new();
-        // The compile definitions the official ortools CMake config exports
-        // (lib/cmake/ortools/ortoolsTargets.cmake); headers depend on them.
-        for (key, value) in [
-            ("OR_PROTO_DLL", Some("")),
-            ("USE_MATH_OPT", None),
-            ("USE_BOP", None),
-            ("USE_CBC", None),
-            ("USE_CLP", None),
-            ("USE_GLOP", None),
-            ("USE_HIGHS", None),
-            ("USE_PDLP", None),
-            ("USE_SCIP", None),
-        ] {
-            shim.define(key, value);
-        }
-        // A GNU `ar` on PATH (e.g. Homebrew binutils) produces archives
-        // Apple's linker rejects ("not 8-byte aligned"); prefer the system
-        // archiver unless the user chose one explicitly.
-        if env::var_os("AR").is_none()
-            && env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
-            && std::path::Path::new("/usr/bin/ar").exists()
-        {
-            shim.archiver("/usr/bin/ar");
-        }
-        shim.cpp(true)
-            .std("c++20")
-            .include(&include_dir)
-            .file("cpp/oxidor_shim.cc")
-            // The bulk of any diagnostics would come from OR-Tools' own
-            // headers; keep the build log readable.
-            .flag_if_supported("-w")
-            .compile("oxidor_shim");
     }
-    // Run-time rpath for this package's own test binaries; link args do not
-    // propagate to dependents.
-    if matches!(
-        env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("macos") | Ok("linux")
-    ) {
-        println!("cargo::rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+    println!("cargo::rerun-if-changed=cpp/oxidor_shim.cc");
+    let mut shim = cc::Build::new();
+    // The compile definitions the official ortools CMake config exports
+    // (lib/cmake/ortools/ortoolsTargets.cmake); headers depend on them.
+    for (key, value) in [
+        ("OR_PROTO_DLL", Some("")),
+        ("USE_MATH_OPT", None),
+        ("USE_BOP", None),
+        ("USE_CBC", None),
+        ("USE_CLP", None),
+        ("USE_GLOP", None),
+        ("USE_HIGHS", None),
+        ("USE_PDLP", None),
+        ("USE_SCIP", None),
+    ] {
+        shim.define(key, value);
     }
-    // Published to direct dependents as DEP_ORTOOLS_ROOT (via `links =
-    // "ortools"`), so they can emit run-time rpath flags for their binaries.
-    println!("cargo::metadata=root={}", prefix.display());
+    // A GNU `ar` on PATH (e.g. Homebrew binutils) produces archives
+    // Apple's linker rejects ("not 8-byte aligned"); prefer the system
+    // archiver unless the user chose one explicitly.
+    if env::var_os("AR").is_none()
+        && env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+        && Path::new("/usr/bin/ar").exists()
+    {
+        shim.archiver("/usr/bin/ar");
+    }
+    shim.cpp(true)
+        .std("c++20")
+        .include(&include_dir)
+        .file("cpp/oxidor_shim.cc")
+        // The bulk of any diagnostics would come from OR-Tools' own
+        // headers; keep the build log readable.
+        .flag_if_supported("-w")
+        .compile("oxidor_shim");
 }
 
 /// The unversioned absl / protobuf shared libraries in `lib_dir` (e.g.
 /// `libabsl_base.dylib` but not `libabsl_base.2508.0.0.dylib`).
-fn shim_native_dependencies(lib_dir: &std::path::Path) -> Vec<String> {
+fn shim_native_dependencies(lib_dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(lib_dir)
         .into_iter()
         .flatten()
@@ -133,7 +184,104 @@ fn die_with_help(cause: &str) -> ! {
          \n\
              export ORTOOLS_PREFIX=/path/to/or-tools\n\
          \n\
+         Or enable oxidor-sys's `download-prebuilt` feature to fetch a static\n\
+         bundle built by this project's CI (no local setup).\n\
+         \n\
          If you only build models (no solving), disable the `solve` feature\n\
          instead: oxidor = {{ version = \"...\", default-features = false }}\n"
     );
+}
+
+/// Downloading, verifying, caching, and unpacking the static bundle.
+#[cfg(feature = "download-prebuilt")]
+mod prebuilt {
+    use std::path::PathBuf;
+
+    /// The release tag on this repository holding the bundles.
+    const RELEASE_TAG: &str = "ortools-v9.15";
+    /// The OR-Tools version baked into the bundle file names.
+    const ORTOOLS_VERSION: &str = "v9.15";
+    /// Per-target SHA-256 of the bundle tarballs, one `<target> <hex>` pair
+    /// per line (kept in a data file so CI updates don't touch code).
+    const CHECKSUMS: &str = include_str!("prebuilt-checksums.txt");
+
+    pub(super) fn obtain() -> PathBuf {
+        let target = std::env::var("TARGET").expect("cargo sets TARGET");
+        let Some(expected_hash) = checksum_for(&target) else {
+            super::die_with_help(&format!(
+                "no prebuilt static bundle is published for target {target}"
+            ));
+        };
+
+        let cache_root = cache_directory();
+        let bundle_root = cache_root.join(format!("{RELEASE_TAG}-{target}"));
+        if bundle_root.join("lib").join("libortools.a").exists() {
+            return bundle_root;
+        }
+
+        let url = format!(
+            "https://github.com/coldsmirk/oxidor/releases/download/{RELEASE_TAG}/oxidor-ortools-{ORTOOLS_VERSION}-{target}.tar.gz"
+        );
+        println!("cargo::warning=oxidor-sys: downloading prebuilt OR-Tools bundle ({url})");
+        let compressed = download(&url);
+        verify_sha256(&compressed, expected_hash, &target);
+
+        // Unpack into a staging directory, then rename into place so a
+        // half-unpacked cache is never mistaken for a valid one.
+        let staging = bundle_root.with_extension("partial");
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging).expect("create cache directory");
+        let decoder = flate2::read::GzDecoder::new(compressed.as_slice());
+        tar::Archive::new(decoder)
+            .unpack(&staging)
+            .expect("unpack the prebuilt bundle");
+        let _ = std::fs::remove_dir_all(&bundle_root);
+        std::fs::rename(&staging, &bundle_root).expect("activate the unpacked bundle");
+        bundle_root
+    }
+
+    fn checksum_for(target: &str) -> Option<&'static str> {
+        CHECKSUMS.lines().find_map(|line| {
+            let mut parts = line.split_whitespace();
+            (parts.next() == Some(target))
+                .then(|| parts.next())
+                .flatten()
+        })
+    }
+
+    fn cache_directory() -> PathBuf {
+        if let Some(dir) = std::env::var_os("OXIDOR_CACHE_DIR") {
+            return PathBuf::from(dir);
+        }
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .expect("HOME is set");
+        PathBuf::from(home).join(".cache").join("oxidor")
+    }
+
+    fn download(url: &str) -> Vec<u8> {
+        let response = ureq::get(url)
+            .timeout(std::time::Duration::from_secs(600))
+            .call()
+            .unwrap_or_else(|error| panic!("downloading {url} failed: {error}"));
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)
+            .expect("read the bundle body");
+        bytes
+    }
+
+    fn verify_sha256(bytes: &[u8], expected: &str, target: &str) {
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(bytes);
+        let actual: String = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "SHA-256 mismatch for the {target} prebuilt bundle — refusing to use it",
+        );
+    }
 }
