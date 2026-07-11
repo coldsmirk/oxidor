@@ -112,3 +112,82 @@ fn respects_solver_parameters() {
     assert_eq!(response.solution().expect("optimal").value(x), 10);
     assert!(response.wall_time() < 30.0);
 }
+
+#[test]
+fn stop_token_interrupts_an_endless_enumeration() {
+    use std::time::{Duration, Instant};
+
+    let mut model = CpModelBuilder::new();
+    // 2^60 free Booleans: enumerating all solutions never terminates on its
+    // own; only the stop request can end this solve.
+    let variables: Vec<_> = (0..60).map(|_| model.new_bool_var()).collect();
+    model.add_bool_or(variables);
+
+    let parameters = SatParameters {
+        enumerate_all_solutions: Some(true),
+        num_workers: Some(1),
+        ..Default::default()
+    };
+
+    let token = oxidor_cpsat::StopToken::new();
+    let stopper = token.clone();
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        stopper.stop();
+    });
+
+    let started = Instant::now();
+    let response = model.solve_interruptible_with_parameters(&token, &parameters);
+    handle.join().expect("stopper thread");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the stop request must end the solve"
+    );
+    // Enumeration was cut short: optimality (= full enumeration) cannot have
+    // been proven.
+    assert_ne!(response.status(), SolveStatus::Optimal);
+}
+
+#[test]
+fn stopping_before_solving_returns_immediately() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(0..=10);
+    model.maximize(x);
+
+    let token = oxidor_cpsat::StopToken::new();
+    token.stop();
+    let response = model.solve_interruptible(&token);
+
+    // The pre-stopped environment ends the search instantly; no conclusion is
+    // reached.
+    assert_ne!(response.status(), SolveStatus::Infeasible);
+}
+
+#[test]
+fn enumerates_the_full_solution_set() {
+    use std::collections::BTreeSet;
+
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(0..=2);
+
+    let parameters = SatParameters {
+        enumerate_all_solutions: Some(true),
+        fill_additional_solutions_in_response: Some(true),
+        solution_pool_size: Some(16),
+        num_workers: Some(1),
+        ..Default::default()
+    };
+    let response = model.solve_with_parameters(&parameters);
+
+    assert_eq!(
+        response.status(),
+        SolveStatus::Optimal,
+        "enumeration completed"
+    );
+    let values: BTreeSet<i64> = response
+        .solutions()
+        .map(|solution| solution.value(x))
+        .collect();
+    assert_eq!(values, BTreeSet::from([0, 1, 2]));
+}

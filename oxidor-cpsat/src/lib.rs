@@ -51,7 +51,7 @@ pub use domain::Domain;
 pub use expr::{BoolVar, IntVar, LinearExpr};
 pub use model::{Constraint, CpModelBuilder, IntervalVar};
 #[cfg(feature = "solve")]
-pub use solver::{Solution, SolveResponse, SolveStatus};
+pub use solver::{Solution, SolveResponse, SolveStatus, StopToken};
 
 /// The generated OR-Tools proto types this API builds on, for advanced use
 /// (inspecting [`CpModelBuilder::proto`], tuning [`SatParameters`], reading
