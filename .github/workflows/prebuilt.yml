@@ -1,0 +1,61 @@
+# Builds static OR-Tools libraries per platform — the artifacts behind the
+# planned `download-prebuilt` mode of oxidor-sys (so `cargo add oxidor` will
+# eventually need no local OR-Tools setup at all).
+#
+# Trigger manually (workflow_dispatch); each job takes on the order of an
+# hour because BUILD_DEPS compiles abseil/protobuf/SCIP/HiGHS from source.
+name: prebuilt-ortools
+
+on:
+  workflow_dispatch:
+
+env:
+  ORTOOLS_TAG: v9.15
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - name: Checkout OR-Tools
+        uses: actions/checkout@v4
+        with:
+          repository: google/or-tools
+          ref: v9.15
+
+      - name: Configure (static, vendored dependencies)
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_SHARED_LIBS=OFF
+          -DBUILD_DEPS=ON
+          -DBUILD_SAMPLES=OFF
+          -DBUILD_EXAMPLES=OFF
+          -DBUILD_TESTING=OFF
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prefix
+
+      - name: Build and install
+        run: cmake --build build --config Release -j 4 --target install
+
+      - name: Package
+        run: |
+          tar czf "oxidor-ortools-${ORTOOLS_TAG}-${{ matrix.target }}.tar.gz" -C prefix .
+          shasum -a 256 "oxidor-ortools-${ORTOOLS_TAG}-${{ matrix.target }}.tar.gz" \
+            > "oxidor-ortools-${ORTOOLS_TAG}-${{ matrix.target }}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxidor-ortools-${{ env.ORTOOLS_TAG }}-${{ matrix.target }}
+          path: oxidor-ortools-${{ env.ORTOOLS_TAG }}-${{ matrix.target }}.tar.gz*
+          retention-days: 30

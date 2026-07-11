@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            archive: or-tools_amd64_ubuntu-24.04_cpp_v9.15.6755.tar.gz
+          - os: macos-latest
+            archive: or-tools_arm64_macOS-26.2_cpp_v9.15.6755.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache the OR-Tools archive
+        id: ortools-cache
+        uses: actions/cache@v4
+        with:
+          path: .ortools
+          key: ortools-v9.15-${{ matrix.os }}
+
+      - name: Fetch OR-Tools
+        if: steps.ortools-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ortools && cd .ortools
+          curl -sfL -o ortools.tar.gz \
+            "https://github.com/google/or-tools/releases/download/v9.15/${{ matrix.archive }}"
+          tar xzf ortools.tar.gz && rm ortools.tar.gz && mv or-tools_* v9.15
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Pure model building without the native library
+        run: cargo check -p oxidor --no-default-features --features cpsat,mathopt
+        env:
+          ORTOOLS_PREFIX: /nonexistent
