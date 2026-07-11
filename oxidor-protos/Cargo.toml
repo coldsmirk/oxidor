@@ -9,5 +9,11 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+# Upstream proto comments contain pseudo-code blocks that rustdoc would treat
+# as Rust doctests; real coverage lives in tests/.
+doctest = false
+
 [dependencies]
 prost = "0.14.4"
+prost-types = "0.14.4"
