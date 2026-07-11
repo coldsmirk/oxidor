@@ -9,9 +9,21 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+# A pure re-export crate has no unit tests; its empty test binary would still
+# load the OR-Tools shared library for nothing.
+test = false
+
 [dependencies]
 oxidor-cpsat = { workspace = true, optional = true }
+# Direct dependency so build.rs receives DEP_ORTOOLS_ROOT for the doctest
+# rpath (the metadata of a `links` crate reaches direct dependents only).
+oxidor-sys = { workspace = true, optional = true }
 
 [features]
-default = ["cpsat"]
+default = ["cpsat", "solve"]
+# The CP-SAT constraint programming solver API.
 cpsat = ["dep:oxidor-cpsat"]
+# Link the native OR-Tools library. Without it, models can be built and
+# serialized but not solved locally.
+solve = ["oxidor-cpsat?/solve", "dep:oxidor-sys"]
