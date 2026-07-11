@@ -62,16 +62,27 @@ jobs:
         run: cmake --build build --config Release -j 4 --target install
 
       - name: Merge every static library into one bundle
+        # Upstream's install step ships only part of the vendored archives
+        # (bzip2, SCIP, and friends stay in the build tree), so collect from
+        # both — installed archives win on name collisions.
         run: |
           libdir=prefix/lib; [ -d prefix/lib64 ] && libdir=prefix/lib64
-          mkdir -p bundle/lib
+          mkdir -p bundle/lib merged_inputs
           cp -R prefix/include bundle/include
+          for archive in "$libdir"/*.a; do
+            cp "$archive" "merged_inputs/$(basename "$archive")"
+          done
+          find build/_deps -name '*.a' | while read -r archive; do
+            base=$(basename "$archive")
+            [ -e "merged_inputs/$base" ] || cp "$archive" "merged_inputs/$base"
+          done
+          ls merged_inputs | wc -l
           if [ "$(uname)" = "Darwin" ]; then
-            libtool -static -o bundle/lib/libortools.a "$libdir"/*.a
+            libtool -static -o bundle/lib/libortools.a merged_inputs/*.a
           else
             {
               echo "create bundle/lib/libortools.a"
-              for archive in "$libdir"/*.a; do echo "addlib $archive"; done
+              for archive in merged_inputs/*.a; do echo "addlib $archive"; done
               echo "save"
               echo "end"
             } | ar -M
