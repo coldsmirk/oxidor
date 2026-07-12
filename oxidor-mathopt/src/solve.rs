@@ -1,8 +1,10 @@
-use core::ffi::{CStr, c_char, c_int, c_void};
+use core::ffi::{CStr, c_char, c_void};
 use std::sync::Arc;
+use std::time::Duration;
 
 use oxidor_protos::math_opt::{
-    PrimalSolutionProto, SolutionStatusProto, SolveResultProto, TerminationReasonProto,
+    PrimalSolutionProto, SolutionStatusProto, SolveParametersProto, SolveResultProto,
+    TerminationReasonProto,
 };
 use oxidor_protos::prost::Message;
 
@@ -10,18 +12,54 @@ use crate::expr::LinearExpr;
 use crate::model::Model;
 
 impl Model {
-    /// Solves the model with the given solver.
+    /// Solves the model with the given solver and default parameters.
     ///
     /// Model shortcomings (infeasible, unbounded, …) are *outcomes*, reported
     /// through [`SolveResult::status`]; `Err` means the solve could not run
     /// at all — most commonly a solver not compiled into the linked OR-Tools
-    /// library, or an invalid model.
-    ///
-    /// The upstream MathOpt C API takes no per-solve parameters (v9.15), so
-    /// there is no time-limit knob here yet; interrupt long solves through
-    /// [`solve_interruptible`](Self::solve_interruptible) instead.
+    /// library (see [`registered_solvers`]), or an invalid model.
     pub fn solve(&self, solver: SolverType) -> Result<SolveResult, SolveError> {
-        self.solve_maybe_interruptible(solver, None)
+        self.solve_with_everything(solver, None, None)
+    }
+
+    /// Solves the model with the given [`SolveParametersProto`] (time and
+    /// solution limits, gap tolerances, thread count, seed, …).
+    ///
+    /// ```no_run
+    /// use oxidor_mathopt::{Model, SolveParametersProto, SolverType};
+    ///
+    /// # let model = Model::new();
+    /// let parameters = SolveParametersProto {
+    ///     threads: Some(4),
+    ///     relative_gap_tolerance: Some(1e-4),
+    ///     ..Default::default()
+    /// };
+    /// let result = model.solve_with_parameters(SolverType::Gscip, &parameters);
+    /// ```
+    pub fn solve_with_parameters(
+        &self,
+        solver: SolverType,
+        parameters: &SolveParametersProto,
+    ) -> Result<SolveResult, SolveError> {
+        self.solve_with_everything(solver, Some(parameters), None)
+    }
+
+    /// Solves the model, giving up after `limit` and returning the best
+    /// solution found so far ([`Feasible`](TerminationReason::Feasible)) or
+    /// [`NoSolutionFound`](TerminationReason::NoSolutionFound) when none was.
+    pub fn solve_with_time_limit(
+        &self,
+        solver: SolverType,
+        limit: Duration,
+    ) -> Result<SolveResult, SolveError> {
+        let parameters = SolveParametersProto {
+            time_limit: Some(oxidor_protos::prost_types::Duration {
+                seconds: i64::try_from(limit.as_secs()).unwrap_or(i64::MAX),
+                nanos: limit.subsec_nanos() as i32,
+            }),
+            ..Default::default()
+        };
+        self.solve_with_everything(solver, Some(&parameters), None)
     }
 
     /// Like [`solve`](Model::solve); the solve can be interrupted from
@@ -31,15 +69,33 @@ impl Model {
         solver: SolverType,
         interrupter: &SolveInterrupter,
     ) -> Result<SolveResult, SolveError> {
-        self.solve_maybe_interruptible(solver, Some(interrupter))
+        self.solve_with_everything(solver, None, Some(interrupter))
     }
 
-    fn solve_maybe_interruptible(
+    /// Like [`solve_with_parameters`](Model::solve_with_parameters), with an
+    /// interrupter.
+    pub fn solve_interruptible_with_parameters(
         &self,
         solver: SolverType,
+        interrupter: &SolveInterrupter,
+        parameters: &SolveParametersProto,
+    ) -> Result<SolveResult, SolveError> {
+        self.solve_with_everything(solver, Some(parameters), Some(interrupter))
+    }
+
+    fn solve_with_everything(
+        &self,
+        solver: SolverType,
+        parameters: Option<&SolveParametersProto>,
         interrupter: Option<&SolveInterrupter>,
     ) -> Result<SolveResult, SolveError> {
-        let proto = solve_serialized(&self.proto().encode_to_vec(), solver, interrupter)?;
+        let parameter_bytes = parameters.map(Message::encode_to_vec).unwrap_or_default();
+        let proto = solve_serialized(
+            &self.proto().encode_to_vec(),
+            solver,
+            &parameter_bytes,
+            interrupter,
+        )?;
         Ok(SolveResult {
             model: self.id(),
             proto,
@@ -54,10 +110,9 @@ impl Model {
 /// MIP), [`Glop`](Self::Glop) (simplex LP), [`CpSat`](Self::CpSat) (integer
 /// models), and [`Pdlp`](Self::Pdlp) (first-order LP).
 ///
-/// **Warning:** selecting a solver whose backend is *not* compiled into the
-/// linked library is not guaranteed to fail cleanly — some registry paths
-/// raise a C++ exception, which cannot cross the C boundary and aborts the
-/// process. Stick to the solvers your OR-Tools build ships.
+/// Selecting a solver the linked library does not register fails cleanly
+/// with a [`SolveError`]; probe availability up front with
+/// [`registered_solvers`].
 ///
 /// The discriminants are the wire values of MathOpt's `SolverTypeProto`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,7 +183,8 @@ impl SolveInterrupter {
     pub fn new() -> Self {
         // SAFETY: no preconditions; the pointer is owned by InterrupterHandle
         // and freed exactly once on drop.
-        let pointer = unsafe { oxidor_sys::MathOptNewInterrupter() };
+        let pointer = unsafe { oxidor_sys::OxidorMathOptNewInterrupter() };
+        assert!(!pointer.is_null(), "allocating a SolveInterrupter failed");
         Self {
             handle: Arc::new(InterrupterHandle { pointer }),
         }
@@ -138,14 +194,15 @@ impl SolveInterrupter {
     /// Idempotent and thread-safe.
     pub fn interrupt(&self) {
         // SAFETY: the pointer is non-null and lives while any clone exists;
-        // the C API documents this call as thread-safe.
-        unsafe { oxidor_sys::MathOptInterrupt(self.handle.pointer) };
+        // the underlying SolveInterrupter documents triggering as
+        // thread-safe.
+        unsafe { oxidor_sys::OxidorMathOptInterrupt(self.handle.pointer) };
     }
 
     /// Whether [`interrupt`](Self::interrupt) has been called.
     pub fn is_interrupted(&self) -> bool {
         // SAFETY: as for `interrupt`.
-        unsafe { oxidor_sys::MathOptIsInterrupted(self.handle.pointer) != 0 }
+        unsafe { oxidor_sys::OxidorMathOptIsInterrupted(self.handle.pointer) != 0 }
     }
 }
 
@@ -165,12 +222,12 @@ impl std::fmt::Debug for SolveInterrupter {
 }
 
 struct InterrupterHandle {
-    pointer: *mut oxidor_sys::MathOptInterrupter,
+    pointer: *mut c_void,
 }
 
-// SAFETY: the C API documents trigger/check as thread-safe and permits
-// sharing one interrupter across concurrent solves; the pointer value itself
-// is immutable after creation.
+// SAFETY: the underlying SolveInterrupter documents trigger/check as
+// thread-safe and permits sharing one interrupter across concurrent solves;
+// the pointer value itself is immutable after creation.
 unsafe impl Send for InterrupterHandle {}
 unsafe impl Sync for InterrupterHandle {}
 
@@ -178,74 +235,138 @@ impl Drop for InterrupterHandle {
     fn drop(&mut self) {
         // SAFETY: dropping the last Arc; the interrupter outlived every solve
         // borrowing it (solves hold a &SolveInterrupter for their duration).
-        unsafe { oxidor_sys::MathOptFreeInterrupter(self.pointer) };
+        unsafe { oxidor_sys::OxidorMathOptFreeInterrupter(self.pointer) };
     }
 }
 
-/// Copies a MathOpt-allocated buffer into owned memory and frees it.
-fn take_mathopt_buffer(pointer: *mut c_void, length: usize) -> Vec<u8> {
+/// Copies a malloc-allocated C buffer into owned memory and frees it.
+fn take_c_buffer(pointer: *mut c_void, length: usize) -> Vec<u8> {
     if pointer.is_null() || length == 0 {
         return Vec::new();
     }
     // SAFETY: non-null with a nonzero length means the C side handed us a
     // readable buffer of exactly `length` bytes that we own; we copy it out
-    // and release it with MathOptFree, as the API requires.
+    // and release it with the C allocator, as the shim contract requires.
     unsafe {
         let bytes = core::slice::from_raw_parts(pointer.cast::<u8>(), length).to_vec();
-        oxidor_sys::MathOptFree(pointer);
+        libc::free(pointer);
         bytes
+    }
+}
+
+/// Copies a malloc-allocated C error string into owned memory and frees it.
+fn take_c_error(pointer: *mut c_char) -> String {
+    if pointer.is_null() {
+        return String::new();
+    }
+    // SAFETY: a non-null error from the shim is a malloc-allocated,
+    // null-terminated string we own.
+    unsafe {
+        let message = CStr::from_ptr(pointer).to_string_lossy().into_owned();
+        libc::free(pointer.cast());
+        message
     }
 }
 
 fn solve_serialized(
     model_bytes: &[u8],
     solver: SolverType,
+    parameter_bytes: &[u8],
     interrupter: Option<&SolveInterrupter>,
 ) -> Result<SolveResultProto, SolveError> {
     let mut result_pointer: *mut c_void = core::ptr::null_mut();
     let mut result_length: usize = 0;
-    let mut status_message: *mut c_char = core::ptr::null_mut();
+    let mut error_pointer: *mut c_char = core::ptr::null_mut();
 
-    // SAFETY: the model buffer is valid for its length; the interrupter, when
-    // present, outlives the call via the borrow; output locations are valid
-    // for writes.
+    // SAFETY: the buffers are valid for their lengths and hold protos we just
+    // encoded; the interrupter, when present, outlives the call via the
+    // borrow; output locations are valid for writes.
     let status_code = unsafe {
-        oxidor_sys::MathOptSolve(
+        oxidor_sys::OxidorMathOptSolveWithParameters(
             model_bytes.as_ptr().cast(),
             model_bytes.len(),
-            solver as c_int,
-            interrupter.map_or(core::ptr::null_mut(), |i| i.handle.pointer),
+            solver as i32,
+            parameter_bytes.as_ptr().cast(),
+            i32::try_from(parameter_bytes.len())
+                .expect("the serialized parameters exceed the shim's 2 GiB limit"),
+            interrupter.map_or(core::ptr::null(), |i| i.handle.pointer.cast_const()),
             &mut result_pointer,
             &mut result_length,
-            &mut status_message,
+            &mut error_pointer,
         )
     };
 
     if status_code != 0 {
-        // SAFETY: on failure the API hands us a null-terminated message we
-        // own; copy it out and free it with MathOptFree.
-        let message = unsafe {
-            let message = if status_message.is_null() {
-                String::new()
-            } else {
-                CStr::from_ptr(status_message)
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            oxidor_sys::MathOptFree(status_message.cast());
-            message
-        };
         return Err(SolveError {
             code: status_code,
-            message,
+            message: take_c_error(error_pointer),
         });
     }
 
     // Free before decoding so a decode panic cannot leak the C buffer.
-    let result_bytes = take_mathopt_buffer(result_pointer, result_length);
+    let result_bytes = take_c_buffer(result_pointer, result_length);
     Ok(SolveResultProto::decode(result_bytes.as_slice()).expect(
         "OR-Tools returned an undecodable SolveResultProto; version mismatch between oxidor-protos and the linked library",
     ))
+}
+
+/// The MathOpt solvers registered in the linked OR-Tools library — the ones
+/// a [`Model::solve`] can actually dispatch to.
+///
+/// The official release archives register SCIP, Glop, CP-SAT, PDLP, GLPK,
+/// OSQP, and HiGHS; commercial backends (Gurobi, Xpress) and future solver
+/// types only appear in builds that include them.
+///
+/// # Panics
+///
+/// Panics if the registry cannot be read (an out-of-memory or C++ exception
+/// inside OR-Tools).
+pub fn registered_solvers() -> Vec<SolverType> {
+    let mut length: i32 = 0;
+    let mut error_pointer: *mut c_char = core::ptr::null_mut();
+    // SAFETY: the output locations are valid for writes; the returned buffer
+    // is copied and freed by take_c_buffer's contract below.
+    let pointer =
+        unsafe { oxidor_sys::OxidorMathOptRegisteredSolvers(&mut length, &mut error_pointer) };
+    if pointer.is_null() {
+        panic!(
+            "listing the registered MathOpt solvers failed natively: {}",
+            take_c_error(error_pointer),
+        );
+    }
+    // SAFETY: non-null means a readable buffer of exactly `length` i32s that
+    // we own; copy it out and release it with the C allocator.
+    let values = unsafe {
+        let values =
+            core::slice::from_raw_parts(pointer, usize::try_from(length).unwrap_or(0)).to_vec();
+        libc::free(pointer.cast());
+        values
+    };
+    values
+        .into_iter()
+        .filter_map(SolverType::from_wire)
+        .collect()
+}
+
+impl SolverType {
+    /// Maps a `SolverTypeProto` wire value onto the enum; `None` for values
+    /// this crate does not know (a newer library's solvers).
+    fn from_wire(value: i32) -> Option<Self> {
+        Some(match value {
+            1 => Self::Gscip,
+            2 => Self::Gurobi,
+            3 => Self::Glop,
+            4 => Self::CpSat,
+            5 => Self::Pdlp,
+            6 => Self::Glpk,
+            7 => Self::Osqp,
+            8 => Self::Ecos,
+            9 => Self::Scs,
+            10 => Self::Highs,
+            13 => Self::Xpress,
+            _ => return None,
+        })
+    }
 }
 
 /// The outcome of a MathOpt solve: a termination reason and any solutions.

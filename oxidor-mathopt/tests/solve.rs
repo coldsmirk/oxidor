@@ -1,7 +1,8 @@
 //! End-to-end tests that cross the FFI boundary into MathOpt.
 
 use oxidor_mathopt::{
-    LinearExpr, Model, SolveInterrupter, SolverType, TerminationReason, Variable,
+    LinearExpr, Model, SolveInterrupter, SolveParametersProto, SolverType, TerminationReason,
+    Variable, registered_solvers,
 };
 
 /// Solver answers are floating point; compare with a tolerance.
@@ -175,13 +176,10 @@ fn lcg_coefficient(state: &mut u64) -> f64 {
     ((*state >> 33) % 100) as f64
 }
 
-#[test]
-fn an_interrupter_stops_a_running_mip_search() {
-    use std::time::{Duration, Instant};
-
-    // A market-split (Cornuéjols–Dawande) feasibility MIP: notoriously hard
-    // for branch and bound at this size — SCIP cannot settle it in seconds,
-    // so only the interrupt can end the solve quickly.
+/// A market-split (Cornuéjols–Dawande) feasibility MIP: notoriously hard for
+/// branch and bound at this size — SCIP cannot settle it in seconds, so only
+/// an external limit can end the solve quickly.
+fn hard_market_split_model() -> Model {
     let mut model = Model::new();
     let variables: Vec<Variable> = (0..50)
         .map(|_| model.new_integer_variable(0.0..=1.0))
@@ -199,6 +197,14 @@ fn an_interrupter_stops_a_running_mip_search() {
         let half = (coefficients.iter().sum::<f64>() / 2.0).floor();
         model.add_equality(row, half);
     }
+    model
+}
+
+#[test]
+fn an_interrupter_stops_a_running_mip_search() {
+    use std::time::{Duration, Instant};
+
+    let model = hard_market_split_model();
 
     let interrupter = SolveInterrupter::new();
     let trigger = interrupter.clone();
@@ -226,6 +232,94 @@ fn an_interrupter_stops_a_running_mip_search() {
         "got {:?}",
         result.status(),
     );
+}
+
+#[test]
+fn solve_with_time_limit_ends_a_hard_mip_early() {
+    use std::time::{Duration, Instant};
+
+    let model = hard_market_split_model();
+
+    let started = Instant::now();
+    let result = model
+        .solve_with_time_limit(SolverType::Gscip, Duration::from_millis(300))
+        .expect("a time limit is not an error");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the time limit must end the solve"
+    );
+    // Cut short, the search cannot have settled the instance either way.
+    assert!(
+        !matches!(
+            result.status(),
+            TerminationReason::Optimal | TerminationReason::Infeasible
+        ),
+        "got {:?}",
+        result.status(),
+    );
+}
+
+#[test]
+fn solve_with_parameters_still_reaches_optimality() {
+    let (model, x, y) = small_lp();
+
+    let parameters = SolveParametersProto {
+        threads: Some(1),
+        ..Default::default()
+    };
+    let result = model
+        .solve_with_parameters(SolverType::Glop, &parameters)
+        .expect("Glop is linked");
+
+    assert_eq!(result.status(), TerminationReason::Optimal);
+    let solution = result.primal_solution().expect("optimal has a solution");
+    assert_close(solution.value(x), 4.0);
+    assert_close(solution.value(y), 10.0);
+}
+
+#[test]
+fn the_registry_lists_the_bundled_solvers() {
+    let registered = registered_solvers();
+    for solver in [
+        SolverType::Glop,
+        SolverType::Gscip,
+        SolverType::CpSat,
+        SolverType::Pdlp,
+    ] {
+        assert!(registered.contains(&solver), "{solver:?} should be linked");
+    }
+}
+
+#[test]
+fn an_unregistered_solver_is_a_clean_error() {
+    let registered = registered_solvers();
+    let known = [
+        SolverType::Gscip,
+        SolverType::Gurobi,
+        SolverType::Glop,
+        SolverType::CpSat,
+        SolverType::Pdlp,
+        SolverType::Glpk,
+        SolverType::Osqp,
+        SolverType::Ecos,
+        SolverType::Scs,
+        SolverType::Highs,
+        SolverType::Xpress,
+    ];
+    // Whatever this build lacks must fail as an error, never an abort. (If a
+    // build registers every known solver, there is nothing to probe.)
+    let Some(&missing) = known.iter().find(|solver| !registered.contains(solver)) else {
+        return;
+    };
+
+    let (model, _, _) = small_lp();
+    let error = model
+        .solve(missing)
+        .expect_err("an unregistered solver cannot run");
+
+    assert_ne!(error.code, 0);
+    assert!(!error.message.is_empty());
 }
 
 #[test]

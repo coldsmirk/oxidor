@@ -5,9 +5,10 @@
 //!
 //! Model building is pure Rust: [`Model`] assembles MathOpt's wire format
 //! (`ModelProto`) with typed variable handles and operator-overloaded
-//! [`LinearExpr`]s. Solving crosses the FFI boundary once per call, through
-//! the official MathOpt C API, exchanging serialized protobuf bytes — no C++
-//! type ever surfaces here.
+//! [`LinearExpr`]s. Solving crosses the FFI boundary once per call through
+//! Oxidor's C shim (the upstream MathOpt C API takes no per-solve
+//! parameters), exchanging serialized protobuf bytes — no C++ type ever
+//! surfaces here.
 //!
 //! # Example: production planning
 //!
@@ -31,9 +32,10 @@
 //!
 //! # Features
 //!
-//! - `solve` *(default)* — links the native OR-Tools library via `oxidor-sys`.
-//!   Disable it to build and serialize models on platforms without the
-//!   library; hand [`Model::proto`] to a solver elsewhere.
+//! - `solve` *(default)* — links the native OR-Tools library via `oxidor-sys`
+//!   and compiles Oxidor's C++ shim (needs the OR-Tools headers and a C++20
+//!   compiler). Disable it to build and serialize models on platforms without
+//!   the library; hand [`Model::proto`] to a solver elsewhere.
 
 #![warn(missing_docs)]
 
@@ -47,8 +49,11 @@ pub use model::{LinearConstraint, Model};
 #[cfg(feature = "solve")]
 pub use solve::{
     PrimalSolution, SolveError, SolveInterrupter, SolveResult, SolverType, TerminationReason,
+    registered_solvers,
 };
 
 /// The generated OR-Tools proto types this API builds on, for advanced use
 /// (inspecting [`Model::proto`], reading [`SolveResult::raw`]).
 pub use oxidor_protos as protos;
+
+pub use protos::math_opt::SolveParametersProto;

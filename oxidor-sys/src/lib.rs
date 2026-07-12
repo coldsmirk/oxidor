@@ -202,6 +202,82 @@ unsafe extern "C" {
     ) -> *mut i64;
 }
 
+// The MathOpt shim entries exist because the upstream C API takes no
+// per-solve parameters; they reach the same core solve the C API wraps.
+#[cfg(feature = "shim")]
+unsafe extern "C" {
+    /// Returns a new, untriggered `operations_research::SolveInterrupter`
+    /// (null on allocation failure).
+    ///
+    /// # Safety
+    ///
+    /// The returned pointer is owned by the caller; release it with
+    /// [`OxidorMathOptFreeInterrupter`] after every solve using it finished.
+    pub fn OxidorMathOptNewInterrupter() -> *mut c_void;
+
+    /// Frees an interrupter from [`OxidorMathOptNewInterrupter`]; no effect
+    /// on null.
+    ///
+    /// # Safety
+    ///
+    /// Must not be called twice for one pointer, nor while a solve still
+    /// uses it.
+    pub fn OxidorMathOptFreeInterrupter(interrupter: *mut c_void);
+
+    /// Triggers the interrupter (sticky). Thread-safe.
+    ///
+    /// # Safety
+    ///
+    /// `interrupter` must be a live, non-null interrupter.
+    pub fn OxidorMathOptInterrupt(interrupter: *mut c_void);
+
+    /// Returns nonzero if triggered. Thread-safe.
+    ///
+    /// # Safety
+    ///
+    /// `interrupter` must be a live, non-null interrupter.
+    pub fn OxidorMathOptIsInterrupted(interrupter: *const c_void) -> i32;
+
+    /// Solves a serialized MathOpt `ModelProto` under a serialized
+    /// `SolveParametersProto` (null/empty for defaults) and an optional
+    /// interrupter from [`OxidorMathOptNewInterrupter`].
+    ///
+    /// Returns 0 on success with a `malloc`-allocated serialized
+    /// `SolveResultProto`; on failure returns an `absl::StatusCode` numeric
+    /// value and sets `*error_message` (`malloc`-allocated).
+    ///
+    /// # Safety
+    ///
+    /// Buffers must be valid for their stated lengths; output locations must
+    /// be valid for writes; the interrupter, when non-null, must outlive the
+    /// call. The caller frees `*out_result` and `*error_message` with the C
+    /// allocator's `free`.
+    pub fn OxidorMathOptSolveWithParameters(
+        model_bytes: *const c_void,
+        model_len: usize,
+        solver_type: i32,
+        params_bytes: *const c_void,
+        params_len: i32,
+        interrupter: *const c_void,
+        out_result: *mut *mut c_void,
+        out_result_len: *mut usize,
+        error_message: *mut *mut c_char,
+    ) -> i32;
+
+    /// Lists the MathOpt solvers registered in the linked library
+    /// (`SolverTypeProto` wire values) as a `malloc`-allocated i32 buffer,
+    /// or null on failure with `*error_message` set.
+    ///
+    /// # Safety
+    ///
+    /// Output locations must be valid for writes. The caller frees the
+    /// returned buffer and `*error_message` with the C allocator's `free`.
+    pub fn OxidorMathOptRegisteredSolvers(
+        out_len: *mut i32,
+        error_message: *mut *mut c_char,
+    ) -> *mut i32;
+}
+
 /// Callback for [`OxidorCpSatSolveWithObserver`]: invoked on each feasible
 /// solution with a serialized `CpSolverResponse` buffer. A nonzero return
 /// asks the search to stop. Must not unwind.

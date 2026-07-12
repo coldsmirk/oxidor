@@ -345,3 +345,144 @@ int32_t OxidorCpSatSolveWithObserver(const void* model_bytes,
 }
 
 }  // extern "C"
+
+#include <algorithm>
+
+#include "absl/status/statusor.h"
+#include "ortools/math_opt/core/solver.h"
+#include "ortools/math_opt/core/solver_interface.h"
+#include "ortools/math_opt/model.pb.h"
+#include "ortools/math_opt/parameters.pb.h"
+#include "ortools/math_opt/result.pb.h"
+#include "ortools/util/solve_interrupter.h"
+
+extern "C" {
+
+// The MathOpt entry points below exist because the upstream C API
+// (math_opt/core/c_api/solver.h) takes no per-solve parameters; they call the
+// same core Solver::NonIncrementalSolve the C API wraps, adding a parsed
+// SolveParametersProto and this shim's own interrupter.
+
+// Returns a new, untriggered operations_research::SolveInterrupter, or null
+// on allocation failure. Release with OxidorMathOptFreeInterrupter.
+void* OxidorMathOptNewInterrupter() {
+  return new (std::nothrow) operations_research::SolveInterrupter();
+}
+
+// Frees an interrupter; no effect on null. It must outlive every solve
+// using it.
+void OxidorMathOptFreeInterrupter(void* interrupter) {
+  delete static_cast<operations_research::SolveInterrupter*>(interrupter);
+}
+
+// Triggers the interrupter. Thread-safe; sticky (never resets).
+void OxidorMathOptInterrupt(void* interrupter) {
+  static_cast<operations_research::SolveInterrupter*>(interrupter)
+      ->Interrupt();
+}
+
+// Returns nonzero if triggered. Thread-safe.
+int32_t OxidorMathOptIsInterrupted(const void* interrupter) {
+  return static_cast<const operations_research::SolveInterrupter*>(interrupter)
+                 ->IsInterrupted()
+             ? 1
+             : 0;
+}
+
+// Solves a serialized MathOpt ModelProto with the solver selected by
+// `solver_type` (SolverTypeProto wire values) under a serialized
+// SolveParametersProto (null/empty for defaults) and an optional interrupter
+// from OxidorMathOptNewInterrupter.
+//
+// Returns 0 on success, with a malloc'd serialized SolveResultProto in
+// `*out_result` / `*out_result_len` (caller frees). On failure returns the
+// absl::StatusCode numeric value (or 3 = invalid argument for unparseable
+// inputs, 13 = internal for caught C++ exceptions) and sets `*error_message`
+// (malloc'd, caller frees).
+int32_t OxidorMathOptSolveWithParameters(
+    const void* model_bytes, size_t model_len, int32_t solver_type,
+    const void* params_bytes, int32_t params_len, const void* interrupter,
+    void** out_result, size_t* out_result_len, char** error_message) {
+  *error_message = nullptr;
+  *out_result = nullptr;
+  *out_result_len = 0;
+  try {
+    operations_research::math_opt::ModelProto model;
+    if (!model.ParseFromArray(model_bytes, static_cast<int>(model_len))) {
+      *error_message = DuplicateMessage("invalid ModelProto bytes");
+      return 3;  // absl::StatusCode::kInvalidArgument
+    }
+    operations_research::math_opt::Solver::SolveArgs solve_args;
+    if (params_bytes != nullptr && params_len > 0 &&
+        !solve_args.parameters.ParseFromArray(params_bytes, params_len)) {
+      *error_message = DuplicateMessage("invalid SolveParametersProto bytes");
+      return 3;
+    }
+    solve_args.interrupter =
+        static_cast<const operations_research::SolveInterrupter*>(interrupter);
+
+    const absl::StatusOr<operations_research::math_opt::SolveResultProto>
+        result = operations_research::math_opt::Solver::NonIncrementalSolve(
+            model,
+            static_cast<operations_research::math_opt::SolverTypeProto>(
+                solver_type),
+            /*init_args=*/{}, solve_args);
+    if (!result.ok()) {
+      *error_message =
+          DuplicateMessage(std::string(result.status().message()).c_str());
+      return static_cast<int32_t>(result.status().code());
+    }
+
+    std::string bytes;
+    result->SerializeToString(&bytes);
+    void* buffer = std::malloc(bytes.size());
+    if (buffer == nullptr && !bytes.empty()) {
+      *error_message = DuplicateMessage("out of memory");
+      return 8;  // absl::StatusCode::kResourceExhausted
+    }
+    std::memcpy(buffer, bytes.data(), bytes.size());
+    *out_result = buffer;
+    *out_result_len = bytes.size();
+    return 0;
+  } catch (const std::exception& exception) {
+    *error_message = DuplicateMessage(exception.what());
+    return 13;  // absl::StatusCode::kInternal
+  } catch (...) {
+    *error_message = DuplicateMessage("unknown C++ exception");
+    return 13;
+  }
+}
+
+// Lists the MathOpt solvers registered in the linked library (SolverTypeProto
+// wire values). Returns a malloc'd int32 buffer of `*out_len` entries (caller
+// frees), or null on failure with `*error_message` set (malloc'd).
+int32_t* OxidorMathOptRegisteredSolvers(int32_t* out_len,
+                                        char** error_message) {
+  *error_message = nullptr;
+  *out_len = 0;
+  try {
+    const std::vector<operations_research::math_opt::SolverTypeProto> solvers =
+        operations_research::math_opt::AllSolversRegistry::Instance()
+            ->RegisteredSolvers();
+    int32_t* buffer = static_cast<int32_t*>(
+        std::malloc(std::max<std::size_t>(1, solvers.size()) *
+                    sizeof(int32_t)));
+    if (buffer == nullptr) {
+      *error_message = DuplicateMessage("out of memory");
+      return nullptr;
+    }
+    for (std::size_t index = 0; index < solvers.size(); ++index) {
+      buffer[index] = static_cast<int32_t>(solvers[index]);
+    }
+    *out_len = static_cast<int32_t>(solvers.size());
+    return buffer;
+  } catch (const std::exception& exception) {
+    *error_message = DuplicateMessage(exception.what());
+    return nullptr;
+  } catch (...) {
+    *error_message = DuplicateMessage("unknown C++ exception");
+    return nullptr;
+  }
+}
+
+}  // extern "C"

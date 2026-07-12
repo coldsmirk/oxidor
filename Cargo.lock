@@ -549,6 +549,7 @@ dependencies = [
 name = "oxidor-mathopt"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "oxidor-protos",
  "oxidor-sys",
 ]
