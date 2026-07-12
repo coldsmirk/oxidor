@@ -4,10 +4,14 @@
 //!
 //! The routing library is imperative C++ with no upstream C API, so this
 //! crate ships its own small C shim (compiled by `oxidor-sys` under its
-//! `shim` feature). The v1 surface deliberately takes a **distance matrix**
-//! rather than callbacks: no Rust closure ever crosses the FFI boundary,
-//! and search parameters travel as a serialized `RoutingSearchParameters`
-//! proto, merged over OR-Tools' defaults.
+//! `shim` feature). The surface deliberately takes **matrices** (arc costs,
+//! travel times) rather than callbacks: no Rust closure ever crosses the FFI
+//! boundary, and search parameters travel as a serialized
+//! `RoutingSearchParameters` proto, merged over OR-Tools' defaults.
+//!
+//! Beyond plain TSP/CVRP, a problem can carry a [`TimeDimension`] (travel
+//! times, service times, time windows — a VRPTW), pickup-and-delivery pairs,
+//! and per-vehicle fixed costs.
 //!
 //! # Example: TSP
 //!
@@ -50,7 +54,7 @@ mod problem;
 #[cfg(feature = "solve")]
 mod solve;
 
-pub use problem::{RoutingError, RoutingProblem};
+pub use problem::{RoutingError, RoutingProblem, TimeDimension};
 #[cfg(feature = "solve")]
 pub use solve::{RoutingResponse, RoutingSolution, RoutingStatus};
 

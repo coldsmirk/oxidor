@@ -47,32 +47,61 @@ int64_t* CopyToMallocBuffer(const std::vector<int64_t>& buffer,
 
 extern "C" {
 
-// Solves a vehicle routing problem over a dense arc-cost matrix.
-//
-// Inputs: `matrix` is row-major with num_nodes^2 entries. `demands` (length
-// num_nodes) and `vehicle_capacities` (length num_vehicles) are either both
-// non-null (adding a capacity dimension) or both null. `params_bytes` is a
-// serialized RoutingSearchParameters merged over the defaults, or null.
+// A vehicle routing problem, mirrored exactly by the #[repr(C)] struct in
+// src/lib.rs. The Rust and C++ sides ship in the same crate and are always
+// compiled in lockstep, so this layout is an internal contract, not a wire
+// format. All lengths are validated on the Rust side before the call.
+typedef struct {
+  int32_t num_nodes;
+  int32_t num_vehicles;
+  int32_t depot;
+  // Row-major num_nodes x num_nodes arc costs.
+  const int64_t* cost_matrix;
+  // Capacity dimension: both null, or num_nodes demands and num_vehicles
+  // capacities.
+  const int64_t* demands;
+  const int64_t* vehicle_capacities;
+  // Null or num_vehicles entries added to the objective per used vehicle.
+  const int64_t* vehicle_fixed_costs;
+  // Time dimension, enabled when travel_times is non-null (row-major
+  // num_nodes x num_nodes). service_times (num_nodes) may be null for zero;
+  // the window arrays are both null or both num_nodes entries, applied to
+  // every node (the depot's window constrains each vehicle's start).
+  const int64_t* travel_times;
+  const int64_t* service_times;
+  const int64_t* time_window_starts;
+  const int64_t* time_window_ends;
+  int64_t time_horizon;
+  int64_t max_waiting_time;
+  // num_pickup_pairs pickup/delivery node pairs: each pair is visited by one
+  // vehicle, pickup first.
+  const int32_t* pickups;
+  const int32_t* deliveries;
+  int32_t num_pickup_pairs;
+  // Serialized RoutingSearchParameters merged over the defaults, or null.
+  const void* params_bytes;
+  int32_t params_len;
+} OxidorRoutingProblem;
+
+// Solves a vehicle routing problem.
 //
 // On success returns a malloc'd int64 buffer of `*out_len` entries laid out
-// as [status, objective, num_routes, route_len, nodes..., route_len, ...]
-// where routes list visited nodes excluding the depot endpoints. On failure
+// as [status, objective, num_routes, has_times, then per route: route_len,
+// nodes..., arrival_times... (route_len entries, only when has_times)];
+// routes exclude the depot endpoints and come one per vehicle. On failure
 // returns null and sets `*error_message` (malloc'd, caller frees).
-int64_t* OxidorRoutingSolveMatrix(int32_t num_nodes, int32_t num_vehicles,
-                                  int32_t depot, const int64_t* matrix,
-                                  const int64_t* demands,
-                                  const int64_t* vehicle_capacities,
-                                  const void* params_bytes,
-                                  int32_t params_len, int32_t* out_len,
-                                  char** error_message) {
+int64_t* OxidorRoutingSolveProblem(const OxidorRoutingProblem* problem,
+                                   int32_t* out_len, char** error_message) {
   *error_message = nullptr;
   *out_len = 0;
   try {
+    const int32_t num_nodes = problem->num_nodes;
     operations_research::RoutingIndexManager manager(
-        num_nodes, num_vehicles,
-        operations_research::RoutingIndexManager::NodeIndex(depot));
+        num_nodes, problem->num_vehicles,
+        operations_research::RoutingIndexManager::NodeIndex(problem->depot));
     operations_research::RoutingModel model(manager);
 
+    const int64_t* matrix = problem->cost_matrix;
     const int transit_index = model.RegisterTransitCallback(
         [&manager, matrix, num_nodes](int64_t from_index,
                                       int64_t to_index) -> int64_t {
@@ -82,24 +111,108 @@ int64_t* OxidorRoutingSolveMatrix(int32_t num_nodes, int32_t num_vehicles,
         });
     model.SetArcCostEvaluatorOfAllVehicles(transit_index);
 
-    if (demands != nullptr && vehicle_capacities != nullptr) {
+    if (problem->vehicle_fixed_costs != nullptr) {
+      for (int32_t vehicle = 0; vehicle < problem->num_vehicles; ++vehicle) {
+        model.SetFixedCostOfVehicle(problem->vehicle_fixed_costs[vehicle],
+                                    vehicle);
+      }
+    }
+
+    if (problem->demands != nullptr &&
+        problem->vehicle_capacities != nullptr) {
+      const int64_t* demands = problem->demands;
       const int demand_index = model.RegisterUnaryTransitCallback(
           [&manager, demands](int64_t index) -> int64_t {
             return demands[manager.IndexToNode(index).value()];
           });
       const std::vector<int64_t> capacities(
-          vehicle_capacities, vehicle_capacities + num_vehicles);
+          problem->vehicle_capacities,
+          problem->vehicle_capacities + problem->num_vehicles);
       model.AddDimensionWithVehicleCapacity(demand_index, /*slack_max=*/0,
                                             capacities,
                                             /*fix_start_cumul_to_zero=*/true,
                                             "Capacity");
     }
 
+    const operations_research::RoutingDimension* time_dimension = nullptr;
+    if (problem->travel_times != nullptr) {
+      const int64_t* travel = problem->travel_times;
+      const int64_t* service = problem->service_times;
+      const int time_index = model.RegisterTransitCallback(
+          [&manager, travel, service, num_nodes](int64_t from_index,
+                                                 int64_t to_index) -> int64_t {
+            const int from = manager.IndexToNode(from_index).value();
+            const int to = manager.IndexToNode(to_index).value();
+            const int64_t service_time = service == nullptr ? 0 : service[from];
+            return travel[static_cast<int64_t>(from) * num_nodes + to] +
+                   service_time;
+          });
+      model.AddDimension(time_index, problem->max_waiting_time,
+                         problem->time_horizon,
+                         /*fix_start_cumul_to_zero=*/false, "Time");
+      operations_research::RoutingDimension* time =
+          model.GetMutableDimension("Time");
+      time_dimension = time;
+      if (problem->time_window_starts != nullptr) {
+        for (int32_t node = 0; node < num_nodes; ++node) {
+          if (node == problem->depot) continue;
+          const int64_t index = manager.NodeToIndex(
+              operations_research::RoutingIndexManager::NodeIndex(node));
+          time->CumulVar(index)->SetRange(problem->time_window_starts[node],
+                                          problem->time_window_ends[node]);
+        }
+      }
+      for (int32_t vehicle = 0; vehicle < problem->num_vehicles; ++vehicle) {
+        if (problem->time_window_starts != nullptr) {
+          time->CumulVar(model.Start(vehicle))
+              ->SetRange(problem->time_window_starts[problem->depot],
+                         problem->time_window_ends[problem->depot]);
+        }
+        // Anchor route start/end times so reported arrivals are the earliest
+        // feasible ones.
+        model.AddVariableMinimizedByFinalizer(
+            time->CumulVar(model.Start(vehicle)));
+        model.AddVariableMinimizedByFinalizer(
+            time->CumulVar(model.End(vehicle)));
+      }
+    }
+
+    if (problem->num_pickup_pairs > 0) {
+      // The pickup-before-delivery ordering needs a cumulative dimension;
+      // reuse time when present, else derive one from the arc costs.
+      const operations_research::RoutingDimension* ordering = time_dimension;
+      if (ordering == nullptr) {
+        int64_t horizon = 0;
+        const int64_t entries = static_cast<int64_t>(num_nodes) * num_nodes;
+        for (int64_t entry = 0; entry < entries; ++entry) {
+          horizon += matrix[entry];  // overflow-checked on the Rust side
+        }
+        model.AddDimension(transit_index, /*slack_max=*/0, horizon,
+                           /*fix_start_cumul_to_zero=*/true, "OxidorOrder");
+        ordering = &model.GetDimensionOrDie("OxidorOrder");
+      }
+      operations_research::Solver* solver = model.solver();
+      for (int32_t pair = 0; pair < problem->num_pickup_pairs; ++pair) {
+        const int64_t pickup = manager.NodeToIndex(
+            operations_research::RoutingIndexManager::NodeIndex(
+                problem->pickups[pair]));
+        const int64_t delivery = manager.NodeToIndex(
+            operations_research::RoutingIndexManager::NodeIndex(
+                problem->deliveries[pair]));
+        model.AddPickupAndDelivery(pickup, delivery);
+        solver->AddConstraint(solver->MakeEquality(model.VehicleVar(pickup),
+                                                   model.VehicleVar(delivery)));
+        solver->AddConstraint(solver->MakeLessOrEqual(
+            ordering->CumulVar(pickup), ordering->CumulVar(delivery)));
+      }
+    }
+
     operations_research::RoutingSearchParameters parameters =
         operations_research::DefaultRoutingSearchParameters();
-    if (params_bytes != nullptr && params_len > 0) {
+    if (problem->params_bytes != nullptr && problem->params_len > 0) {
       operations_research::RoutingSearchParameters overrides;
-      if (!overrides.ParseFromArray(params_bytes, params_len)) {
+      if (!overrides.ParseFromArray(problem->params_bytes,
+                                    problem->params_len)) {
         *error_message =
             DuplicateMessage("invalid RoutingSearchParameters bytes");
         return nullptr;
@@ -115,14 +228,27 @@ int64_t* OxidorRoutingSolveMatrix(int32_t num_nodes, int32_t num_vehicles,
     if (solution == nullptr) {
       buffer.push_back(0);  // objective
       buffer.push_back(0);  // num_routes
+      buffer.push_back(0);  // has_times
     } else {
       buffer.push_back(solution->ObjectiveValue());
-      std::vector<std::vector<int64_t>> routes;
-      model.AssignmentToRoutes(*solution, &routes);
-      buffer.push_back(static_cast<int64_t>(routes.size()));
-      for (const std::vector<int64_t>& route : routes) {
-        buffer.push_back(static_cast<int64_t>(route.size()));
-        buffer.insert(buffer.end(), route.begin(), route.end());
+      buffer.push_back(problem->num_vehicles);
+      buffer.push_back(time_dimension != nullptr ? 1 : 0);
+      for (int32_t vehicle = 0; vehicle < problem->num_vehicles; ++vehicle) {
+        std::vector<int64_t> nodes;
+        std::vector<int64_t> arrivals;
+        int64_t index = model.Start(vehicle);
+        while (!model.IsEnd(index)) {
+          if (!model.IsStart(index)) {
+            nodes.push_back(manager.IndexToNode(index).value());
+            if (time_dimension != nullptr) {
+              arrivals.push_back(solution->Min(time_dimension->CumulVar(index)));
+            }
+          }
+          index = solution->Value(model.NextVar(index));
+        }
+        buffer.push_back(static_cast<int64_t>(nodes.size()));
+        buffer.insert(buffer.end(), nodes.begin(), nodes.end());
+        buffer.insert(buffer.end(), arrivals.begin(), arrivals.end());
       }
     }
     return CopyToMallocBuffer(buffer, out_len, error_message);

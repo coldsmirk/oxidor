@@ -166,37 +166,84 @@ unsafe extern "C" {
     pub fn MathOptFree(ptr: *mut c_void);
 }
 
+/// A vehicle routing problem for [`OxidorRoutingSolveProblem`], mirroring
+/// the C struct in `cpp/oxidor_shim.cc` exactly. The two sides ship in the
+/// same crate and are always compiled in lockstep, so this layout is an
+/// internal contract, not a wire format.
+///
+/// All lengths must be validated by the caller: `cost_matrix` (and
+/// `travel_times` when non-null) hold `num_nodes²` row-major entries;
+/// `demands`, `service_times`, and the two window arrays hold `num_nodes`
+/// entries when non-null; `vehicle_capacities` and `vehicle_fixed_costs`
+/// hold `num_vehicles`; `pickups`/`deliveries` hold `num_pickup_pairs`.
+/// `demands`/`vehicle_capacities` are both null or both set, as are the two
+/// window arrays. A non-null `travel_times` enables the time dimension.
+#[cfg(feature = "shim")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OxidorRoutingProblem {
+    /// Number of nodes (matrix side length).
+    pub num_nodes: i32,
+    /// Number of vehicles (= routes in the reply).
+    pub num_vehicles: i32,
+    /// The node every route starts and ends at.
+    pub depot: i32,
+    /// Row-major `num_nodes²` arc costs.
+    pub cost_matrix: *const i64,
+    /// Per-node demands (capacity dimension) or null.
+    pub demands: *const i64,
+    /// Per-vehicle capacities (capacity dimension) or null.
+    pub vehicle_capacities: *const i64,
+    /// Per-vehicle fixed usage costs or null.
+    pub vehicle_fixed_costs: *const i64,
+    /// Row-major `num_nodes²` travel times (enables the time dimension) or
+    /// null.
+    pub travel_times: *const i64,
+    /// Per-node service times or null (zeros).
+    pub service_times: *const i64,
+    /// Per-node time-window starts or null (unconstrained).
+    pub time_window_starts: *const i64,
+    /// Per-node time-window ends or null (unconstrained).
+    pub time_window_ends: *const i64,
+    /// Upper bound on any route's cumulative time.
+    pub time_horizon: i64,
+    /// Waiting time a vehicle may spend at each node.
+    pub max_waiting_time: i64,
+    /// Pickup nodes of the pickup-delivery pairs or null.
+    pub pickups: *const i32,
+    /// Delivery nodes of the pickup-delivery pairs or null.
+    pub deliveries: *const i32,
+    /// Number of pickup-delivery pairs.
+    pub num_pickup_pairs: i32,
+    /// Serialized `RoutingSearchParameters` merged over the defaults, or
+    /// null.
+    pub params_bytes: *const c_void,
+    /// Length of `params_bytes`.
+    pub params_len: i32,
+}
+
 // Oxidor's own C shim (`cpp/oxidor_shim.cc`, compiled under the `shim`
 // feature) for OR-Tools APIs without an upstream C API.
 #[cfg(feature = "shim")]
 unsafe extern "C" {
-    /// Solves a vehicle routing problem over a dense arc-cost matrix.
-    ///
-    /// `matrix` is row-major with `num_nodes²` entries. `demands` (length
-    /// `num_nodes`) and `vehicle_capacities` (length `num_vehicles`) are
-    /// either both non-null (adds a capacity dimension) or both null.
-    /// `params_bytes` is a serialized `RoutingSearchParameters` merged over
-    /// the defaults, or null.
+    /// Solves a vehicle routing problem.
     ///
     /// On success returns a `malloc`-allocated i64 buffer of `*out_len`
-    /// entries laid out as `[status, objective, num_routes, route_len,
-    /// nodes…, route_len, …]`; routes exclude the depot endpoints. On failure
-    /// returns null and sets `*error_message` (`malloc`-allocated).
+    /// entries laid out as `[status, objective, num_routes, has_times,` then
+    /// per route `route_len, nodes…, arrival_times…]` (`route_len` arrival
+    /// entries, present only when `has_times` is 1); routes exclude the
+    /// depot endpoints and come one per vehicle. On failure returns null and
+    /// sets `*error_message` (`malloc`-allocated).
     ///
     /// # Safety
     ///
-    /// Input arrays must be valid for the stated lengths; output locations
-    /// must be valid for writes. The caller owns the returned buffer and
+    /// `problem` must point to a struct satisfying the length contract in
+    /// [`OxidorRoutingProblem`]'s docs, with every array valid for the
+    /// stated length for the duration of the call; output locations must be
+    /// valid for writes. The caller owns the returned buffer and
     /// `*error_message`, releasing both with the C allocator's `free`.
-    pub fn OxidorRoutingSolveMatrix(
-        num_nodes: i32,
-        num_vehicles: i32,
-        depot: i32,
-        matrix: *const i64,
-        demands: *const i64,
-        vehicle_capacities: *const i64,
-        params_bytes: *const c_void,
-        params_len: i32,
+    pub fn OxidorRoutingSolveProblem(
+        problem: *const OxidorRoutingProblem,
         out_len: *mut i32,
         error_message: *mut *mut c_char,
     ) -> *mut i64;
