@@ -8,8 +8,10 @@
 //!   re-exported at the crate root.
 //! - [MathOpt](mod@mathopt) — linear and mixed-integer optimization (Glop,
 //!   SCIP, CP-SAT, PDLP behind one model).
-//! - [Routing](mod@routing) — TSP and capacitated VRP over a distance matrix.
-//! - [Algorithms](mod@algorithms) — knapsack, max flow, min cost flow.
+//! - [Routing](mod@routing) — TSP and VRP over a distance matrix, with time
+//!   windows, pickup-delivery pairs, capacities, and vehicle fixed costs.
+//! - [Algorithms](mod@algorithms) — knapsack, max flow, min cost flow,
+//!   linear sum assignment.
 //!
 //! Reach for CP-SAT when the problem is combinatorial (discrete choices,
 //! scheduling rules, logical conditions); reach for MathOpt when it is a
@@ -49,15 +51,19 @@
 //!
 //! # Features
 //!
+//! The default set enables all four families plus solving; solving compiles
+//! Oxidor's C++ shim, which needs the OR-Tools headers and a C++20 compiler
+//! (both official release archives and the prebuilt bundles ship the
+//! headers).
+//!
 //! - `cpsat` *(default)* — the CP-SAT API, [`cpsat`](mod@cpsat).
+//! - `callbacks` *(default)* — CP-SAT streaming solution callbacks
+//!   (`solve_with_solution_callback`).
 //! - `mathopt` *(default)* — the LP/MIP API, [`mathopt`](mod@mathopt).
-//! - `routing` — TSP/VRP over a distance matrix, [`routing`](mod@routing).
-//!   Solving compiles Oxidor's C++ shim (needs the OR-Tools headers and a
-//!   C++20 compiler), so it is not in the default set.
-//! - `algorithms` — knapsack, max flow, min cost flow,
-//!   [`algorithms`](mod@algorithms). Compiles the same C++ shim, and — unlike
-//!   the model-building crates — always links the native library (there is no
-//!   pure-model subset to fall back to).
+//! - `routing` *(default)* — TSP/VRP, [`routing`](mod@routing).
+//! - `algorithms` *(default)* — knapsack, flows, and assignment,
+//!   [`algorithms`](mod@algorithms). Unlike the model-building crates it
+//!   always links the native library (there is no pure-model subset).
 //! - `solve` *(default)* — links the native OR-Tools library. Disable to
 //!   build and serialize models on platforms without it.
 //! - `download-prebuilt` — when `ORTOOLS_PREFIX` is not set, fetch a

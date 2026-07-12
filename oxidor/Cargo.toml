@@ -26,16 +26,18 @@ oxidor-algorithms = { workspace = true, optional = true }
 oxidor-sys = { workspace = true, optional = true }
 
 [features]
-default = ["cpsat", "mathopt", "solve"]
+# Solving (any family) compiles Oxidor's C++ shim, which needs the OR-Tools
+# headers and a C++20 compiler — official archives and the prebuilt bundles
+# both ship the headers, so the default set enables everything.
+default = ["cpsat", "callbacks", "mathopt", "routing", "algorithms", "solve"]
 # The CP-SAT constraint programming solver API.
 cpsat = ["dep:oxidor-cpsat"]
 # The MathOpt LP/MIP solving API.
 mathopt = ["dep:oxidor-mathopt"]
-# Vehicle routing (TSP/VRP). Not in the default set: solving compiles
-# Oxidor's C++ shim, which needs the OR-Tools headers and a C++20 compiler.
+# Vehicle routing (TSP/VRP with time windows, pickups-deliveries).
 routing = ["dep:oxidor-routing"]
-# Knapsack, max flow, min cost flow. Same C++ shim requirement as `routing`,
-# and no pure-model subset — enabling this always links.
+# Knapsack, max flow, min cost flow, linear sum assignment. No pure-model
+# subset — enabling this always links.
 algorithms = ["dep:oxidor-algorithms"]
 # Link the native OR-Tools library. Without it, models can be built and
 # serialized but not solved locally.
