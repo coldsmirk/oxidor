@@ -56,14 +56,26 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      - name: Run the nurse_scheduling example
+        run: cargo run -p oxidor-cpsat --example nurse_scheduling
+
       - name: Pure model building without the native library
         run: cargo check -p oxidor --no-default-features --features cpsat,mathopt
         env:
           ORTOOLS_PREFIX: /nonexistent
 
+      - name: Cache the prebuilt static bundle
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/oxidor
+          key: oxidor-prebuilt-${{ matrix.os }}-${{ hashFiles('oxidor-sys/prebuilt-checksums.txt') }}
+
       - name: End-to-end download-prebuilt (static bundle from our release)
         # Empty ORTOOLS_PREFIX forces the download path; this exercises the
-        # real release asset, the SHA-256 gate, and static linking.
-        run: cargo test -p oxidor-cpsat --features oxidor-sys/download-prebuilt --test solve
+        # real release asset, the SHA-256 gate, static linking, and — through
+        # routing/algorithms — the shim compiled against the bundle headers.
+        run: >
+          cargo test -p oxidor-cpsat -p oxidor-routing -p oxidor-algorithms
+          --features oxidor-sys/download-prebuilt --test solve
         env:
           ORTOOLS_PREFIX: ""

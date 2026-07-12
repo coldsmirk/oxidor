@@ -1,9 +1,14 @@
 # Builds static OR-Tools libraries per platform — the artifacts behind the
-# planned `download-prebuilt` mode of oxidor-sys (so `cargo add oxidor` will
-# eventually need no local OR-Tools setup at all).
+# `download-prebuilt` mode of oxidor-sys (`cargo add oxidor` with no local
+# OR-Tools setup).
 #
 # Trigger manually (workflow_dispatch); each job takes on the order of an
 # hour because BUILD_DEPS compiles abseil/protobuf/SCIP/HiGHS from source.
+#
+# Publishing is manual (see AGENTS.md "Prebuilt bundles"): download the
+# artifacts, attach them to a release, regenerate prebuilt-checksums.txt.
+# Release assets are immutable once a crate pinning their checksums has
+# shipped — republish under a new tag instead of replacing an asset.
 name: prebuilt-ortools
 
 on:
@@ -31,7 +36,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: google/or-tools
-          ref: v9.15
+          ref: ${{ env.ORTOOLS_TAG }}
 
       - name: Force static dependency builds
         # Upstream hard-codes shared libraries for every BUILD_DEPS
@@ -48,7 +53,11 @@ jobs:
           # graph intact).
           perl -pi -e 's/set\(ENABLE_LIB_ONLY ON\)/set(ENABLE_LIB_ONLY ON)\n  set(ENABLE_STATIC_LIB ON)/' \
             cmake/dependencies/CMakeLists.txt
-          grep -n 'BUILD_SHARED_LIBS OFF\|ENABLE_STATIC_LIB' cmake/dependencies/CMakeLists.txt
+          # Each replacement is guarded separately: a silent miss (upstream
+          # renamed a line) must fail the build, not slip through.
+          grep -q 'set(BUILD_SHARED_LIBS OFF)' cmake/dependencies/CMakeLists.txt
+          grep -q 'set(protobuf_BUILD_SHARED_LIBS OFF)' cmake/dependencies/CMakeLists.txt
+          grep -q 'set(ENABLE_STATIC_LIB ON)' cmake/dependencies/CMakeLists.txt
 
       - name: Configure (static, vendored dependencies)
         run: >
