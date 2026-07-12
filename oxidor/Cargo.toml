@@ -40,6 +40,9 @@ algorithms = ["dep:oxidor-algorithms"]
 # Link the native OR-Tools library. Without it, models can be built and
 # serialized but not solved locally.
 solve = ["oxidor-cpsat?/solve", "oxidor-mathopt?/solve", "oxidor-routing?/solve", "dep:oxidor-sys"]
+# Streaming CP-SAT solution callbacks (solve_with_solution_callback). Same
+# C++ shim requirement as `routing`.
+callbacks = ["cpsat", "solve", "oxidor-cpsat/callbacks"]
 # When ORTOOLS_PREFIX is not set, fetch a SHA-256-verified static OR-Tools
 # bundle from this project's GitHub releases instead — zero local setup.
 download-prebuilt = ["solve", "oxidor-sys/download-prebuilt"]

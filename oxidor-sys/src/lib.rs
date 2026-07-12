@@ -202,8 +202,46 @@ unsafe extern "C" {
     ) -> *mut i64;
 }
 
+/// Callback for [`OxidorCpSatSolveWithObserver`]: invoked on each feasible
+/// solution with a serialized `CpSolverResponse` buffer. A nonzero return
+/// asks the search to stop. Must not unwind.
+#[cfg(feature = "shim")]
+pub type OxidorCpSolutionCallback = unsafe extern "C" fn(
+    response_bytes: *const c_void,
+    response_len: i32,
+    user_data: *mut c_void,
+) -> i32;
+
 #[cfg(feature = "shim")]
 unsafe extern "C" {
+    /// Solves a serialized `CpModelProto` like
+    /// [`SolveCpModelWithParameters`], additionally invoking `callback` on
+    /// every feasible solution found during the search.
+    ///
+    /// On success returns 0 and writes a `malloc`-allocated serialized
+    /// `CpSolverResponse` to `*out_response` / `*out_response_len`. On
+    /// failure returns nonzero and sets `*error_message`
+    /// (`malloc`-allocated).
+    ///
+    /// # Safety
+    ///
+    /// Input buffers must be valid for reads of their stated lengths; output
+    /// locations must be valid for writes. `callback` must not unwind, and
+    /// `user_data` must stay valid for the whole call (the callback may run
+    /// on solver worker threads, serialized by the solver). The caller frees
+    /// `*out_response` and `*error_message` with the C allocator's `free`.
+    pub fn OxidorCpSatSolveWithObserver(
+        model_bytes: *const c_void,
+        model_len: i32,
+        params_bytes: *const c_void,
+        params_len: i32,
+        callback: OxidorCpSolutionCallback,
+        user_data: *mut c_void,
+        out_response: *mut *mut c_void,
+        out_response_len: *mut i32,
+        error_message: *mut *mut c_char,
+    ) -> i32;
+
     /// Solves a (multi-dimensional) 0-1 knapsack with branch and bound.
     ///
     /// `weights` is row-major `num_dims × num_items`; `capacities` has

@@ -1,5 +1,6 @@
 // Oxidor's own C shim over OR-Tools C++ APIs that ship no upstream C API
-// (routing today; more as the bindings grow).
+// (routing, the algorithms, CP-SAT solution observers; more as the bindings
+// grow).
 //
 // Contract, mirrored by the declarations in src/lib.rs:
 //   * plain C ABI; only POD scalars, arrays, and serialized protos cross it;
@@ -250,6 +251,96 @@ int32_t OxidorMinCostFlowSolve(const int32_t* tails, const int32_t* heads,
   } catch (...) {
     *error_message = DuplicateMessage("unknown C++ exception");
     return -1;
+  }
+}
+
+}  // extern "C"
+
+#include <atomic>
+
+#include "ortools/sat/cp_model.pb.h"
+#include "ortools/sat/cp_model_solver.h"
+#include "ortools/sat/model.h"
+#include "ortools/sat/sat_parameters.pb.h"
+#include "ortools/util/time_limit.h"
+
+extern "C" {
+
+// Invoked on each feasible solution with a serialized CpSolverResponse; a
+// nonzero return asks the search to stop. Must not throw or unwind.
+typedef int32_t (*OxidorCpSolutionCallback)(const void* response_bytes,
+                                            int32_t response_len,
+                                            void* user_data);
+
+// Solves a serialized CpModelProto like the official C API, additionally
+// invoking `callback` on every feasible solution found during the search
+// (every improving solution; every solution when the parameters set
+// enumerate_all_solutions). This is the same observer registration the
+// official C API's interruptible env uses internally, so stopping via the
+// callback return value behaves exactly like SolveCpStopSearch.
+//
+// On success returns 0 and hands out a malloc'd serialized CpSolverResponse
+// (`*out_response` / `*out_response_len`, caller frees). On failure returns
+// nonzero and sets `*error_message` (malloc'd, caller frees).
+int32_t OxidorCpSatSolveWithObserver(const void* model_bytes,
+                                     int32_t model_len,
+                                     const void* params_bytes,
+                                     int32_t params_len,
+                                     OxidorCpSolutionCallback callback,
+                                     void* user_data, void** out_response,
+                                     int32_t* out_response_len,
+                                     char** error_message) {
+  *error_message = nullptr;
+  *out_response = nullptr;
+  *out_response_len = 0;
+  try {
+    operations_research::sat::CpModelProto model_proto;
+    if (!model_proto.ParseFromArray(model_bytes, model_len)) {
+      *error_message = DuplicateMessage("invalid CpModelProto bytes");
+      return 1;
+    }
+    operations_research::sat::SatParameters parameters;
+    if (params_bytes != nullptr && params_len > 0 &&
+        !parameters.ParseFromArray(params_bytes, params_len)) {
+      *error_message = DuplicateMessage("invalid SatParameters bytes");
+      return 1;
+    }
+
+    operations_research::sat::Model model;
+    model.Add(operations_research::sat::NewSatParameters(parameters));
+    std::atomic<bool> stopped(false);
+    model.GetOrCreate<operations_research::TimeLimit>()
+        ->RegisterExternalBooleanAsLimit(&stopped);
+    model.Add(operations_research::sat::NewFeasibleSolutionObserver(
+        [callback, user_data, &stopped](
+            const operations_research::sat::CpSolverResponse& solution) {
+          std::string bytes;
+          solution.SerializeToString(&bytes);
+          if (callback(bytes.data(), static_cast<int32_t>(bytes.size()),
+                       user_data) != 0) {
+            stopped.store(true);
+          }
+        }));
+
+    const operations_research::sat::CpSolverResponse response =
+        operations_research::sat::SolveCpModel(model_proto, &model);
+    std::string bytes;
+    response.SerializeToString(&bytes);
+    void* buffer = std::malloc(bytes.size());
+    if (buffer == nullptr && !bytes.empty()) {
+      *error_message = DuplicateMessage("out of memory");
+      return 1;
+    }
+    std::memcpy(buffer, bytes.data(), bytes.size());
+    *out_response = buffer;
+    *out_response_len = static_cast<int32_t>(bytes.size());
+    return 0;
+  } catch (const std::exception& exception) {
+    *error_message = DuplicateMessage(exception.what());
+    return 1;
+  } catch (...) {
+    *error_message = DuplicateMessage("unknown C++ exception");
+    return 1;
   }
 }
 

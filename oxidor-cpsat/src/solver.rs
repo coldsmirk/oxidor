@@ -259,13 +259,13 @@ impl Drop for SolveEnvironment {
 
 /// A buffer length as the `c_int` the C API takes; the API cannot represent
 /// larger inputs, so exceeding it is a documented panic.
-fn c_length(bytes: &[u8]) -> c_int {
+pub(crate) fn c_length(bytes: &[u8]) -> c_int {
     c_int::try_from(bytes.len())
         .expect("the serialized input exceeds the CP-SAT C API's 2 GiB limit")
 }
 
 /// Copies a malloc-allocated C buffer into owned memory and frees it.
-fn take_c_buffer(pointer: *mut c_void, length: c_int) -> Vec<u8> {
+pub(crate) fn take_c_buffer(pointer: *mut c_void, length: c_int) -> Vec<u8> {
     if pointer.is_null() || length <= 0 {
         return Vec::new();
     }
@@ -328,6 +328,12 @@ pub struct SolveResponse {
 }
 
 impl SolveResponse {
+    /// Assembles a response for handles of the model with identity `model`.
+    #[cfg(feature = "callbacks")]
+    pub(crate) fn from_parts(model: u32, proto: CpSolverResponse) -> Self {
+        Self { model, proto }
+    }
+
     /// What the search established.
     pub fn status(&self) -> SolveStatus {
         match self.proto.status() {

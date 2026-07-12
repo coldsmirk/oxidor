@@ -38,9 +38,15 @@
 //! - `solve` *(default)* — links the native OR-Tools library via `oxidor-sys`.
 //!   Disable it to build and serialize models on platforms without the
 //!   library; hand [`CpModelBuilder::proto`] to a solver elsewhere.
+//! - `callbacks` — streaming solution callbacks
+//!   (`solve_with_solution_callback`): observe every feasible solution as
+//!   the search finds it and stop early at will. Compiles Oxidor's C++ shim,
+//!   which needs the OR-Tools headers and a C++20 compiler.
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "callbacks")]
+mod callbacks;
 mod domain;
 mod expr;
 mod model;
