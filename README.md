@@ -2,21 +2,25 @@
 
 **Unofficial Rust bindings for [Google OR-Tools](https://developers.google.com/optimization).**
 
-> Status: early development. CP-SAT solving works end to end; the native
-> library is currently located via `ORTOOLS_PREFIX` (prebuilt-download and
-> vendored builds are on the roadmap).
+> Status: early development (0.1.x, **not yet published to crates.io** — use a
+> git dependency until the first release lands). Four solver families work end
+> to end — CP-SAT, MathOpt (LP/MIP), routing (TSP/VRP), and the classic
+> algorithms — verified by CI on three platforms. MSRV 1.85.
 
 Oxidor binds the OR-Tools C++ solvers through a deliberately thin boundary:
 models are built as protobuf messages in pure Rust, and only `solve()`
-crosses the FFI line — through the official CP-SAT C API, the same
-architecture Google chose for its official Go bindings. No C++ type ever
-surfaces in the API.
+crosses the FFI line — through the official C APIs where they exist (CP-SAT,
+MathOpt; the same architecture Google chose for its official Go bindings),
+and through Oxidor's own exception-safe C shim where they don't (routing,
+algorithms). No C++ type ever surfaces in the API.
 
 ## Quick start
 
 ```toml
 [dependencies]
-oxidor = "0.0.1"
+# Zero local setup: the build downloads a SHA-256-verified static OR-Tools
+# bundle from this project's releases (see the platform table below).
+oxidor = { git = "https://github.com/coldsmirk/oxidor", features = ["download-prebuilt"] }
 ```
 
 ```rust
@@ -34,18 +38,9 @@ if let Some(solution) = response.solution() {
 }
 ```
 
-Solving needs the OR-Tools native library, obtained one of three ways:
-
-- **`download-prebuilt` feature** — fetches a static OR-Tools bundle built by
-  this project's CI from its GitHub releases (SHA-256 verified, cached under
-  `~/.cache/oxidor`) and links it statically: no local setup, self-contained
-  binaries. Covers CP-SAT, routing, and the algorithms; MathOpt's solver
-  registry needs the dynamic library, so use `ORTOOLS_PREFIX` for it.
-- **`ORTOOLS_PREFIX`** — point it at an extracted official [C++ release
-  archive](https://github.com/google/or-tools/releases) (dynamic linking, all
-  solvers; always wins when set).
-- **Model building alone** (`default-features = false`) — pure Rust, needs
-  nothing.
+Long solves take a first-class time limit
+(`model.solve_with_time_limit(Duration::from_secs(10))`), and every other
+CP-SAT knob is reachable through `solve_with_parameters(&SatParameters { … })`.
 
 For a real scheduling model — nurses, days, shifts, even workloads — see
 [`oxidor-cpsat/examples/nurse_scheduling.rs`](oxidor-cpsat/examples/nurse_scheduling.rs):
@@ -54,15 +49,50 @@ For a real scheduling model — nurses, days, shifts, even workloads — see
 cargo run -p oxidor-cpsat --example nurse_scheduling
 ```
 
-Linear and mixed-integer programming go through MathOpt, with the solver
-chosen per call (Glop, SCIP, CP-SAT, and PDLP ship in the official archives):
+## Getting the native library
+
+Solving needs the OR-Tools native library, obtained one of three ways:
+
+- **`download-prebuilt` feature** — fetches a static OR-Tools bundle built by
+  this project's CI from its GitHub releases (SHA-256 pinned in the crate,
+  cached under `~/.cache/oxidor`) and links it statically: no local setup,
+  self-contained binaries. Covers CP-SAT, routing, and the algorithms;
+  MathOpt's solver registry needs the dynamic library, so use
+  `ORTOOLS_PREFIX` for it.
+- **`ORTOOLS_PREFIX`** — point it at an extracted official [C++ release
+  archive](https://github.com/google/or-tools/releases) (dynamic linking, all
+  solvers; always wins when set):
+
+  ```sh
+  export ORTOOLS_PREFIX=/path/to/extracted/or-tools
+  ```
+
+- **Model building alone** (`default-features = false`) — pure Rust, needs
+  nothing.
+
+Prebuilt bundles currently exist for:
+
+| Target | `download-prebuilt` |
+|---|---|
+| `aarch64-apple-darwin` | ✅ |
+| `x86_64-unknown-linux-gnu` | ✅ |
+| `aarch64-unknown-linux-gnu` | ✅ |
+| `x86_64-apple-darwin` | ❌ — use `ORTOOLS_PREFIX` |
+| Windows | ❌ — untested altogether; `ORTOOLS_PREFIX` may work but is not covered by CI |
+
+## Beyond CP-SAT
+
+Reach for CP-SAT when the problem is combinatorial (discrete choices,
+scheduling rules, logical conditions); reach for **MathOpt** when it is a
+classic LP/MIP over continuous or integer quantities, with the solver chosen
+per call (Glop, SCIP, CP-SAT, and PDLP ship in the official archives):
 
 ```rust
 use oxidor::mathopt::{Model, SolverType};
 
 let mut model = Model::new();
-let x = model.add_continuous_variable(0.0..=10.0);
-let y = model.add_continuous_variable(0.0..=10.0);
+let x = model.new_continuous_variable(0.0..=10.0);
+let y = model.new_continuous_variable(0.0..=10.0);
 model.add_less_or_equal(x + y, 14.0);
 model.maximize(2.0 * x + 3.0 * y);
 
@@ -72,9 +102,13 @@ if let Some(solution) = result.primal_solution() {
 }
 ```
 
-Long solves can be stopped from another thread — CP-SAT via `StopToken`,
-MathOpt via `SolveInterrupter` — and CP-SAT can enumerate a model's full
-solution set (`SolveResponse::solutions()`).
+Beware: picking a `SolverType` whose backend is not compiled into the linked
+library may abort the process (a C++ exception cannot cross the C boundary) —
+stick to the solvers your OR-Tools build ships.
+
+Long solves can be stopped from another thread — CP-SAT via
+`StopToken`/`Stopper`, MathOpt via `SolveInterrupter` — and CP-SAT can
+enumerate a model's full solution set (`SolveResponse::solutions()`).
 
 Vehicle routing (TSP/VRP, `routing` feature) works over a distance matrix,
 and the classic algorithms (`algorithms` feature) come as plain calls:
@@ -83,10 +117,13 @@ and the classic algorithms (`algorithms` feature) come as plain calls:
 use oxidor::routing::RoutingProblem;
 use oxidor::algorithms::solve_knapsack;
 
-let tour = RoutingProblem::from_matrix(matrix)?
+let response = RoutingProblem::from_matrix(matrix)?
     .with_vehicles(2)
     .with_capacities(demands, capacities)
     .solve()?;
+if let Some(tour) = response.solution() {
+    println!("cost {}: {:?}", tour.objective_value(), tour.routes());
+}
 
 let packing = solve_knapsack(&[60, 100, 120], &[10, 20, 30], 50)?;
 ```
@@ -128,19 +165,21 @@ the output is committed.
 
 ## Roadmap
 
-1. **CP-SAT** — ✅ model builder, solve, interruptible solve (`StopToken`),
-   solution enumeration; next: streaming solution callbacks (via the shim).
+1. **CP-SAT** — ✅ model builder, solve (+ first-class time limit),
+   interruptible solve (`StopToken`/`Stopper`), solution enumeration,
+   min/max equality; next: streaming solution callbacks (via the shim).
 2. **Linear solving (MathOpt)** — ✅ LP/MIP model builder, per-call solver
    choice (Glop / SCIP / CP-SAT / PDLP), interruption, clean error paths.
+   Next: per-solve parameters (needs an upstream or shim C API extension).
 3. **Routing (VRP/TSP)** — ✅ v1: TSP and capacitated VRP over a distance
    matrix through Oxidor's C++ shim; search parameters as protos. Next:
    time windows, pickups/deliveries, Rust transit callbacks.
 4. **Algorithms** — ✅ knapsack (multi-dimensional branch and bound), max
    flow, min cost flow.
-5. **Distribution** — CI test matrix ✅; a `prebuilt-ortools` workflow builds
-   static libraries per platform, and a `download-prebuilt` mode in
-   `oxidor-sys` will consume them (with checksums) once published — the goal
-   is `cargo add oxidor` with no setup at all.
+5. **Distribution** — ✅ CI test matrix on three platforms; prebuilt static
+   bundles consumed by `download-prebuilt` (checksums pinned in-crate, e2e
+   tested in CI). Next: more targets (Intel macOS, Windows), a `vendored`
+   source-build mode, and the first crates.io release.
 
 ## License
 
