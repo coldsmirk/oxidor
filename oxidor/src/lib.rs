@@ -1,14 +1,19 @@
 //! Unofficial Rust bindings for [Google
 //! OR-Tools](https://developers.google.com/optimization).
 //!
-//! Two solver families are supported so far:
+//! Four solver families are supported:
 //!
 //! - [CP-SAT](mod@cpsat) — constraint programming for scheduling, rostering,
 //!   packing, and other combinatorial problems. Its everyday types are
 //!   re-exported at the crate root.
 //! - [MathOpt](mod@mathopt) — linear and mixed-integer optimization (Glop,
-//!   SCIP, CP-SAT, PDLP behind one model), under the [`mathopt`](mod@mathopt)
-//!   module.
+//!   SCIP, CP-SAT, PDLP behind one model).
+//! - [Routing](mod@routing) — TSP and capacitated VRP over a distance matrix.
+//! - [Algorithms](mod@algorithms) — knapsack, max flow, min cost flow.
+//!
+//! Reach for CP-SAT when the problem is combinatorial (discrete choices,
+//! scheduling rules, logical conditions); reach for MathOpt when it is a
+//! classic LP/MIP over continuous or integer quantities.
 //!
 //! ```no_run
 //! use oxidor::CpModelBuilder;
@@ -31,8 +36,8 @@
 //! use oxidor::mathopt::{Model, SolverType};
 //!
 //! let mut model = Model::new();
-//! let x = model.add_continuous_variable(0.0..=10.0);
-//! let y = model.add_continuous_variable(0.0..=10.0);
+//! let x = model.new_continuous_variable(0.0..=10.0);
+//! let y = model.new_continuous_variable(0.0..=10.0);
 //! model.add_less_or_equal(x + y, 14.0);
 //! model.maximize(2.0 * x + 3.0 * y);
 //!
@@ -50,9 +55,15 @@
 //!   Solving compiles Oxidor's C++ shim (needs the OR-Tools headers and a
 //!   C++20 compiler), so it is not in the default set.
 //! - `algorithms` — knapsack, max flow, min cost flow,
-//!   [`algorithms`](mod@algorithms). Same shim requirement as `routing`.
+//!   [`algorithms`](mod@algorithms). Compiles the same C++ shim, and — unlike
+//!   the model-building crates — always links the native library (there is no
+//!   pure-model subset to fall back to).
 //! - `solve` *(default)* — links the native OR-Tools library. Disable to
 //!   build and serialize models on platforms without it.
+//! - `download-prebuilt` — when `ORTOOLS_PREFIX` is not set, fetch a
+//!   SHA-256-verified static OR-Tools bundle from this project's GitHub
+//!   releases and link it: zero local setup. Covers CP-SAT, routing, and the
+//!   algorithms; MathOpt needs a dynamic library via `ORTOOLS_PREFIX`.
 
 #![warn(missing_docs)]
 
@@ -74,4 +85,4 @@ pub use oxidor_cpsat::{
 };
 
 #[cfg(all(feature = "cpsat", feature = "solve"))]
-pub use oxidor_cpsat::{Solution, SolveResponse, SolveStatus, StopToken};
+pub use oxidor_cpsat::{Solution, SolveResponse, SolveStatus, StopToken, Stopper};
