@@ -67,11 +67,10 @@ fn main() {
         compile_shim(&installation, &lib_dir);
     }
 
-    println!("cargo::metadata=libdir={}", lib_dir.display());
-    // Published to direct dependents as DEP_ORTOOLS_ROOT (via `links =
+    // Published to direct dependents as DEP_ORTOOLS_LIBDIR (via `links =
     // "ortools"`), so they can emit run-time rpath flags for their binaries
     // (harmless for the static bundle, which needs no rpath).
-    println!("cargo::metadata=root={}", installation.root.display());
+    println!("cargo::metadata=libdir={}", lib_dir.display());
 }
 
 fn locate_installation() -> Installation {
@@ -138,9 +137,10 @@ fn compile_shim(installation: &Installation, lib_dir: &Path) {
     }
     // A GNU `ar` on PATH (e.g. Homebrew binutils) produces archives
     // Apple's linker rejects ("not 8-byte aligned"); prefer the system
-    // archiver unless the user chose one explicitly.
+    // archiver unless the user chose one explicitly. The archiver runs on
+    // the build host, so gate on HOST rather than the target.
     if env::var_os("AR").is_none()
-        && env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+        && env::var("HOST").is_ok_and(|host| host.contains("apple-darwin"))
         && Path::new("/usr/bin/ar").exists()
     {
         shim.archiver("/usr/bin/ar");
@@ -202,6 +202,14 @@ fn shared_library_name() -> &'static str {
 }
 
 fn die_with_help(cause: &str) -> ! {
+    // Only suggest download-prebuilt when it is not already enabled.
+    let prebuilt_hint = if cfg!(feature = "download-prebuilt") {
+        ""
+    } else {
+        "Or enable oxidor-sys's `download-prebuilt` feature to fetch a static\n\
+         bundle built by this project's CI (no local setup).\n\
+         \n"
+    };
     panic!(
         "\n\
          oxidor-sys could not locate the OR-Tools native library: {cause}.\n\
@@ -212,9 +220,7 @@ fn die_with_help(cause: &str) -> ! {
          \n\
              export ORTOOLS_PREFIX=/path/to/or-tools\n\
          \n\
-         Or enable oxidor-sys's `download-prebuilt` feature to fetch a static\n\
-         bundle built by this project's CI (no local setup).\n\
-         \n\
+         {prebuilt_hint}\
          If you only build models (no solving), disable the `solve` feature\n\
          instead: oxidor = {{ version = \"...\", default-features = false }}\n"
     );
@@ -234,6 +240,7 @@ mod prebuilt {
     const CHECKSUMS: &str = include_str!("prebuilt-checksums.txt");
 
     pub(super) fn obtain() -> PathBuf {
+        println!("cargo::rerun-if-env-changed=OXIDOR_CACHE_DIR");
         let target = std::env::var("TARGET").expect("cargo sets TARGET");
         let Some(expected_hash) = checksum_for(&target) else {
             super::die_with_help(&format!(
@@ -248,7 +255,8 @@ mod prebuilt {
             "{RELEASE_TAG}-{target}-{}",
             &expected_hash[..16.min(expected_hash.len())]
         ));
-        if bundle_root.join("lib").join("libortools.a").exists() {
+        let is_complete = |root: &std::path::Path| root.join("lib").join("libortools.a").exists();
+        if is_complete(&bundle_root) {
             return bundle_root;
         }
 
@@ -259,17 +267,27 @@ mod prebuilt {
         let compressed = download(&url);
         verify_sha256(&compressed, expected_hash, &target);
 
-        // Unpack into a staging directory, then rename into place so a
-        // half-unpacked cache is never mistaken for a valid one.
-        let staging = bundle_root.with_extension("partial");
-        let _ = std::fs::remove_dir_all(&staging);
+        // Unpack into a process-unique staging directory, then rename into
+        // place: a half-unpacked cache is never mistaken for a valid one, and
+        // concurrent builds cannot clobber each other's staging area.
+        let staging = bundle_root.with_extension(format!("partial-{}", std::process::id()));
         std::fs::create_dir_all(&staging).expect("create cache directory");
         let decoder = flate2::read::GzDecoder::new(compressed.as_slice());
         tar::Archive::new(decoder)
             .unpack(&staging)
             .expect("unpack the prebuilt bundle");
-        let _ = std::fs::remove_dir_all(&bundle_root);
-        std::fs::rename(&staging, &bundle_root).expect("activate the unpacked bundle");
+        match std::fs::rename(&staging, &bundle_root) {
+            Ok(()) => {}
+            // A concurrent build won the rename with content of the same
+            // verified hash; discard our copy and use theirs.
+            Err(_) if is_complete(&bundle_root) => {
+                let _ = std::fs::remove_dir_all(&staging);
+            }
+            Err(error) => panic!(
+                "could not activate the unpacked bundle at {}: {error}",
+                bundle_root.display()
+            ),
+        }
         bundle_root
     }
 
