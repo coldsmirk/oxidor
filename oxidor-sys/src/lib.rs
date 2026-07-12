@@ -1,21 +1,31 @@
 //! Raw FFI declarations for the Google OR-Tools C APIs — CP-SAT
 //! (`ortools/sat/c_api/cp_solver_c.h`) and MathOpt
 //! (`ortools/math_opt/core/c_api/solver.h`) — plus the linkage against the
-//! native OR-Tools library.
+//! native OR-Tools library and, under the `shim` feature, Oxidor's own C
+//! bridge for APIs without an upstream C API (routing, algorithms).
 //!
 //! Higher-level crates never link OR-Tools directly — they go through this
-//! crate. All exchange happens as serialized protobuf bytes; no C++ type
-//! crosses the boundary.
+//! crate. All exchange happens as serialized protobuf bytes or flat POD
+//! arrays; no C++ type crosses the boundary.
 //!
 //! # Library acquisition
 //!
-//! Currently the build script links an existing installation located via the
-//! `ORTOOLS_PREFIX` environment variable (expects `$ORTOOLS_PREFIX/lib` to
-//! contain the OR-Tools shared library, as laid out by the official release
-//! archives). Planned additions: `download-prebuilt` (static libraries built
-//! by this project's CI) and `vendored` (CMake source build).
+//! The build script obtains the native library one of two ways:
+//!
+//! - **`ORTOOLS_PREFIX`** (always wins when set) — links the shared library
+//!   of an existing installation, as laid out by the official release
+//!   archives. All solvers available.
+//! - **`download-prebuilt` feature** — when `ORTOOLS_PREFIX` is unset,
+//!   downloads a static OR-Tools bundle built by this project's CI from its
+//!   GitHub releases (SHA-256 pinned in the crate, cached under
+//!   `~/.cache/oxidor`) and links it statically. Covers CP-SAT, routing, and
+//!   the algorithms; MathOpt's solver registry relies on global initializers
+//!   that selective static linking drops, so MathOpt needs `ORTOOLS_PREFIX`.
+//!
+//! A `vendored` (CMake source build) mode remains on the roadmap.
 
 #![no_std]
+#![warn(missing_docs)]
 
 use core::ffi::{c_char, c_int, c_void};
 
