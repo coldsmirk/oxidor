@@ -103,8 +103,18 @@ mod tests {
     }
 
     #[test]
-    fn shifting_saturates_at_bounds() {
-        let domain = Domain::from_intervals([(i64::MIN, 0)]);
+    fn shifting_pins_the_infinity_sentinels() {
+        // A positive shift distinguishes pinning from saturating for MAX,
+        // a negative one for MIN.
+        let upper = Domain::from_intervals([(0, i64::MAX)]);
+        assert_eq!(upper.flattened_shifted(5), vec![-5, i64::MAX]);
+        let lower = Domain::from_intervals([(i64::MIN, 0)]);
+        assert_eq!(lower.flattened_shifted(-5), vec![i64::MIN, 5]);
+    }
+
+    #[test]
+    fn shifting_saturates_finite_bounds() {
+        let domain = Domain::from_intervals([(i64::MIN + 1, 0)]);
         assert_eq!(domain.flattened_shifted(5), vec![i64::MIN, -5]);
     }
 }

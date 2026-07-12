@@ -4,28 +4,40 @@ use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
 /// An integer variable of a [`CpModelBuilder`](crate::CpModelBuilder).
 ///
-/// A cheap copyable handle; the variable's state lives in the model.
+/// A cheap copyable handle; the variable's state lives in the model. A handle
+/// is only meaningful to the builder that created it (and that builder's
+/// clones) — using it with another model is a programmer error and panics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IntVar(pub(crate) i32);
+pub struct IntVar {
+    pub(crate) model: u32,
+    pub(crate) index: i32,
+}
 
 /// A Boolean literal: a Boolean variable of a
 /// [`CpModelBuilder`](crate::CpModelBuilder) or its negation (see [`Self::not`]).
 ///
 /// In linear expressions a literal contributes `1` when true and `0` when
 /// false. A cheap copyable handle using CP-SAT's literal index encoding
-/// (`-index - 1` for negations).
+/// (`-index - 1` for negations); like [`IntVar`], it is only meaningful to
+/// the builder that created it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BoolVar(pub(crate) i32);
+pub struct BoolVar {
+    pub(crate) model: u32,
+    pub(crate) index: i32,
+}
 
 impl BoolVar {
     /// The negation of this literal. Involutive: `b.not().not() == b`.
     #[allow(clippy::should_implement_trait)] // `Not` would collide with `!` on exprs later; explicit reads better.
     pub fn not(self) -> Self {
-        Self(-self.0 - 1)
+        Self {
+            model: self.model,
+            index: -self.index - 1,
+        }
     }
 
     pub(crate) fn literal_index(self) -> i32 {
-        self.0
+        self.index
     }
 }
 
@@ -45,8 +57,16 @@ impl BoolVar {
 /// let total: LinearExpr = [x, x, x].into_iter().sum();
 /// # let _ = (expr, total);
 /// ```
+///
+/// # Panics
+///
+/// Combining variables of two different models in one expression is a
+/// programmer error and panics.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LinearExpr {
+    /// The model the variables in `terms` belong to; `None` for a
+    /// constant-only expression.
+    pub(crate) model: Option<u32>,
     pub(crate) terms: Vec<(i32, i64)>,
     pub(crate) constant: i64,
 }
@@ -58,6 +78,18 @@ impl LinearExpr {
             .into_iter()
             .map(Into::into)
             .fold(Self::default(), Add::add)
+    }
+
+    /// Absorbs another expression's model identity, panicking on a mix of
+    /// two different models.
+    fn merge_model(&mut self, other: Option<u32>) {
+        match (self.model, other) {
+            (Some(mine), Some(theirs)) if mine != theirs => {
+                panic!("cannot mix variables from two different models in one expression")
+            }
+            (None, Some(theirs)) => self.model = Some(theirs),
+            _ => {}
+        }
     }
 
     /// Collapses to `(vars, coeffs, constant)` with duplicate variables
@@ -76,7 +108,8 @@ impl LinearExpr {
 impl From<IntVar> for LinearExpr {
     fn from(var: IntVar) -> Self {
         Self {
-            terms: vec![(var.0, 1)],
+            model: Some(var.model),
+            terms: vec![(var.index, 1)],
             constant: 0,
         }
     }
@@ -84,15 +117,18 @@ impl From<IntVar> for LinearExpr {
 
 impl From<BoolVar> for LinearExpr {
     fn from(literal: BoolVar) -> Self {
-        let index = literal.0;
+        let model = Some(literal.model);
+        let index = literal.index;
         if index >= 0 {
             Self {
+                model,
                 terms: vec![(index, 1)],
                 constant: 0,
             }
         } else {
             // not(x) contributes 1 - x.
             Self {
+                model,
                 terms: vec![(-index - 1, -1)],
                 constant: 1,
             }
@@ -103,6 +139,7 @@ impl From<BoolVar> for LinearExpr {
 impl From<i64> for LinearExpr {
     fn from(constant: i64) -> Self {
         Self {
+            model: None,
             terms: Vec::new(),
             constant,
         }
@@ -128,6 +165,7 @@ impl<R: Into<LinearExpr>> Sub<R> for LinearExpr {
 impl<R: Into<LinearExpr>> AddAssign<R> for LinearExpr {
     fn add_assign(&mut self, rhs: R) {
         let rhs = rhs.into();
+        self.merge_model(rhs.model);
         self.terms.extend(rhs.terms);
         self.constant += rhs.constant;
     }
@@ -136,6 +174,7 @@ impl<R: Into<LinearExpr>> AddAssign<R> for LinearExpr {
 impl<R: Into<LinearExpr>> SubAssign<R> for LinearExpr {
     fn sub_assign(&mut self, rhs: R) {
         let rhs = rhs.into();
+        self.merge_model(rhs.model);
         self.terms
             .extend(rhs.terms.into_iter().map(|(var, coeff)| (var, -coeff)));
         self.constant -= rhs.constant;
@@ -213,10 +252,18 @@ impl_i64_lhs_ops!(IntVar, BoolVar, LinearExpr);
 mod tests {
     use super::*;
 
+    fn int_var(index: i32) -> IntVar {
+        IntVar { model: 0, index }
+    }
+
+    fn bool_var(index: i32) -> BoolVar {
+        BoolVar { model: 0, index }
+    }
+
     #[test]
     fn merges_duplicate_terms_and_drops_zeros() {
-        let x = IntVar(0);
-        let y = IntVar(1);
+        let x = int_var(0);
+        let y = int_var(1);
         let (vars, coeffs, constant) = (2 * x + y - x - y + 7).into_parts();
         assert_eq!(vars, vec![0]);
         assert_eq!(coeffs, vec![1]);
@@ -225,7 +272,7 @@ mod tests {
 
     #[test]
     fn negated_literal_expands_to_one_minus_var() {
-        let b = BoolVar(3);
+        let b = bool_var(3);
         let (vars, coeffs, constant) = LinearExpr::from(b.not()).into_parts();
         assert_eq!(vars, vec![3]);
         assert_eq!(coeffs, vec![-1]);
@@ -234,14 +281,14 @@ mod tests {
 
     #[test]
     fn literal_negation_is_involutive() {
-        let b = BoolVar(5);
+        let b = bool_var(5);
         assert_eq!(b.not().not(), b);
         assert_eq!(b.not().literal_index(), -6);
     }
 
     #[test]
     fn i64_lhs_operators_build_expressions() {
-        let x = IntVar(2);
+        let x = int_var(2);
         let (vars, coeffs, constant) = (10 - 3 * x).into_parts();
         assert_eq!(vars, vec![2]);
         assert_eq!(coeffs, vec![-3]);
@@ -250,12 +297,26 @@ mod tests {
 
     #[test]
     fn sum_accepts_mixed_items() {
-        let x = IntVar(0);
-        let b = BoolVar(1);
+        let x = int_var(0);
+        let b = bool_var(1);
         let total = LinearExpr::sum([LinearExpr::from(x), b.into(), 4.into()]);
         let (vars, coeffs, constant) = total.into_parts();
         assert_eq!(vars, vec![0, 1]);
         assert_eq!(coeffs, vec![1, 1]);
         assert_eq!(constant, 4);
+    }
+
+    #[test]
+    fn constants_carry_no_model_identity() {
+        let expr = LinearExpr::from(7) + int_var(0);
+        assert_eq!(expr.model, Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "two different models")]
+    fn mixing_models_in_an_expression_panics() {
+        let x = IntVar { model: 0, index: 0 };
+        let y = IntVar { model: 1, index: 0 };
+        let _ = x + y;
     }
 }

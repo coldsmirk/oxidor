@@ -21,6 +21,23 @@ fn maximizes_a_small_linear_objective_to_optimality() {
 }
 
 #[test]
+fn minimizes_with_the_correct_objective_sign() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(0..=10);
+    let y = model.new_int_var(0..=10);
+    model.add_greater_or_equal(x + y, 4);
+    model.minimize(2 * x + 3 * y);
+
+    let response = model.solve();
+
+    assert_eq!(response.status(), SolveStatus::Optimal);
+    // The cheaper x carries the whole requirement: x = 4, y = 0 ⇒ 8.
+    assert_eq!(response.objective_value(), 8.0);
+    let solution = response.solution().expect("optimal implies a solution");
+    assert_eq!(solution.value(2 * x + 3 * y), 8);
+}
+
+#[test]
 fn proves_infeasibility() {
     let mut model = CpModelBuilder::new();
     let x = model.new_int_var(0..=1);
@@ -30,6 +47,13 @@ fn proves_infeasibility() {
 
     assert_eq!(response.status(), SolveStatus::Infeasible);
     assert!(response.solution().is_none());
+}
+
+#[test]
+fn an_empty_model_solves_trivially() {
+    let model = CpModelBuilder::new();
+    let response = model.solve();
+    assert_eq!(response.status(), SolveStatus::Optimal);
 }
 
 #[test]
@@ -46,7 +70,7 @@ fn enforcement_literals_gate_constraints() {
 
     let solution = response.solution().expect("feasible");
     assert_eq!(response.status(), SolveStatus::Optimal);
-    assert!(solution.boolean_value(use_big));
+    assert!(solution.bool_value(use_big));
     assert_eq!(solution.value(x), 42);
 }
 
@@ -65,7 +89,7 @@ fn exactly_one_picks_a_single_literal() {
     let solution = response.solution().expect("feasible");
     let chosen = options
         .iter()
-        .filter(|&&option| solution.boolean_value(option))
+        .filter(|&&option| solution.bool_value(option))
         .count();
     assert_eq!(chosen, 1);
 }
@@ -96,6 +120,63 @@ fn no_overlap_yields_the_known_minimal_makespan() {
 }
 
 #[test]
+fn cumulative_packs_within_capacity() {
+    // Two units of capacity; two unit-demand tasks may run in parallel, but
+    // the demand-2 task must run alone: minimal makespan 2 + 2 = 4.
+    let mut model = CpModelBuilder::new();
+    let horizon = 10;
+    let makespan = model.new_int_var(0..=horizon);
+    let demands = [1, 1, 2];
+    let intervals: Vec<_> = demands
+        .map(|_| {
+            let start = model.new_int_var(0..=horizon);
+            let interval = model.new_interval_var(start, 2, start + 2);
+            model.add_less_or_equal(start + 2, makespan);
+            interval
+        })
+        .into_iter()
+        .collect();
+    model.add_cumulative(2, &intervals, &demands);
+    model.minimize(makespan);
+
+    let response = model.solve();
+
+    assert_eq!(response.status(), SolveStatus::Optimal);
+    assert_eq!(response.objective_value(), 4.0);
+}
+
+#[test]
+fn max_equality_supports_minimizing_the_peak() {
+    // Two loads that must sum to 10; minimizing the peak balances them.
+    let mut model = CpModelBuilder::new();
+    let first = model.new_int_var(0..=10);
+    let second = model.new_int_var(0..=10);
+    model.add_equality(first + second, 10);
+    let peak = model.new_int_var(0..=10);
+    model.add_max_equality(peak, [first, second]);
+    model.minimize(peak);
+
+    let response = model.solve();
+
+    assert_eq!(response.status(), SolveStatus::Optimal);
+    assert_eq!(response.objective_value(), 5.0);
+}
+
+#[test]
+fn min_equality_binds_the_smallest_expression() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(3..=3);
+    let y = model.new_int_var(7..=7);
+    let low = model.new_int_var(0..=10);
+    model.add_min_equality(low, [x, y]);
+
+    let response = model.solve();
+
+    let solution = response.solution().expect("feasible");
+    assert_eq!(solution.value(low), 3);
+}
+
+#[test]
 fn respects_solver_parameters() {
     let mut model = CpModelBuilder::new();
     let x = model.new_int_var(0..=10);
@@ -114,6 +195,18 @@ fn respects_solver_parameters() {
 }
 
 #[test]
+fn solve_with_time_limit_still_cracks_an_easy_model() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(0..=10);
+    model.maximize(x);
+
+    let response = model.solve_with_time_limit(std::time::Duration::from_secs(30));
+
+    assert_eq!(response.status(), SolveStatus::Optimal);
+    assert_eq!(response.solution().expect("optimal").value(x), 10);
+}
+
+#[test]
 fn stop_token_interrupts_an_endless_enumeration() {
     use std::time::{Duration, Instant};
 
@@ -129,15 +222,15 @@ fn stop_token_interrupts_an_endless_enumeration() {
         ..Default::default()
     };
 
-    let token = oxidor_cpsat::StopToken::new();
-    let stopper = token.clone();
+    let mut token = oxidor_cpsat::StopToken::new();
+    let stopper = token.stopper();
     let handle = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));
         stopper.stop();
     });
 
     let started = Instant::now();
-    let response = model.solve_interruptible_with_parameters(&token, &parameters);
+    let response = model.solve_interruptible_with_parameters(&mut token, &parameters);
     handle.join().expect("stopper thread");
 
     assert!(
@@ -155,13 +248,14 @@ fn stopping_before_solving_returns_immediately() {
     let x = model.new_int_var(0..=10);
     model.maximize(x);
 
-    let token = oxidor_cpsat::StopToken::new();
+    let mut token = oxidor_cpsat::StopToken::new();
     token.stop();
-    let response = model.solve_interruptible(&token);
+    let response = model.solve_interruptible(&mut token);
 
-    // The pre-stopped environment ends the search instantly; no conclusion is
-    // reached.
-    assert_ne!(response.status(), SolveStatus::Infeasible);
+    // The pre-stopped environment ends the search before any work: were the
+    // stop ignored, this trivial model would come back Optimal.
+    assert_eq!(response.status(), SolveStatus::Unknown);
+    assert!(response.solution().is_none());
 }
 
 #[test]
@@ -190,4 +284,55 @@ fn enumerates_the_full_solution_set() {
         .map(|solution| solution.value(x))
         .collect();
     assert_eq!(values, BTreeSet::from([0, 1, 2]));
+}
+
+#[test]
+fn picks_shifts_like_the_crate_example() {
+    // Mirrors the crate-level doctest so its golden value is executed in CI.
+    let mut model = CpModelBuilder::new();
+    let shifts = [
+        model.new_bool_var(),
+        model.new_bool_var(),
+        model.new_bool_var(),
+    ];
+    let hours = [6, 4, 8];
+
+    model.add_at_most_one([shifts[0], shifts[1]]);
+    model.add_linear_constraint(shifts.into_iter().sum::<oxidor_cpsat::LinearExpr>(), 2..=2);
+    model.maximize(
+        shifts
+            .iter()
+            .zip(hours)
+            .map(|(&s, h)| s * h)
+            .sum::<oxidor_cpsat::LinearExpr>(),
+    );
+
+    let response = model.solve();
+    let solution = response.solution().expect("feasible");
+    assert_eq!(response.objective_value(), 14.0);
+    assert!(solution.bool_value(shifts[2]));
+}
+
+#[test]
+#[should_panic(expected = "different model")]
+fn evaluating_a_foreign_handle_panics() {
+    let mut solved = CpModelBuilder::new();
+    let x = solved.new_int_var(0..=1);
+    let response = solved.solve();
+    let solution = response.solution().expect("feasible");
+    let _ = solution.value(x); // same model: fine
+
+    let mut other = CpModelBuilder::new();
+    let foreign = other.new_int_var(0..=1);
+    let _ = solution.value(foreign);
+}
+
+#[test]
+#[should_panic(expected = "created after the solve")]
+fn evaluating_a_post_solve_handle_panics() {
+    let mut model = CpModelBuilder::new();
+    let _x = model.new_int_var(0..=1);
+    let response = model.solve();
+    let late = model.new_int_var(0..=1);
+    let _ = response.solution().expect("feasible").value(late);
 }

@@ -52,7 +52,7 @@ fn main() {
     // works 5 or 6 shifts.
     let total_shifts = NUM_DAYS * NUM_SHIFTS;
     let min_per_nurse = (total_shifts / NUM_NURSES) as i64;
-    let max_per_nurse = min_per_nurse + i64::from(!total_shifts.is_multiple_of(NUM_NURSES));
+    let max_per_nurse = min_per_nurse + i64::from(total_shifts % NUM_NURSES != 0);
     let workload_of = |nurse: usize| -> LinearExpr {
         assigned
             .iter()
@@ -82,7 +82,7 @@ fn main() {
             .iter()
             .map(|candidates| {
                 let nurse = (0..NUM_NURSES)
-                    .find(|&nurse| solution.boolean_value(candidates[nurse]))
+                    .find(|&nurse| solution.bool_value(candidates[nurse]))
                     .expect("every shift is covered");
                 format!("{:>8}", format!("nurse {nurse}"))
             })

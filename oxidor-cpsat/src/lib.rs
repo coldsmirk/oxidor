@@ -30,7 +30,7 @@
 //! let response = model.solve();
 //! let solution = response.solution().expect("feasible");
 //! assert_eq!(response.objective_value(), 14.0);
-//! assert!(solution.boolean_value(shifts[2]));
+//! assert!(solution.bool_value(shifts[2]));
 //! ```
 //!
 //! # Features
@@ -51,7 +51,7 @@ pub use domain::Domain;
 pub use expr::{BoolVar, IntVar, LinearExpr};
 pub use model::{Constraint, CpModelBuilder, IntervalVar};
 #[cfg(feature = "solve")]
-pub use solver::{Solution, SolveResponse, SolveStatus, StopToken};
+pub use solver::{Solution, SolveResponse, SolveStatus, StopToken, Stopper};
 
 /// The generated OR-Tools proto types this API builds on, for advanced use
 /// (inspecting [`CpModelBuilder::proto`], tuning [`SatParameters`], reading
