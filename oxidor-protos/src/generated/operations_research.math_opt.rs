@@ -383,6 +383,676 @@ pub struct ModelProto {
         IndicatorConstraintProto,
     >,
 }
+/// GLPK specific parameters for solving.
+///
+/// Fields are optional to enable to capture user intention; if they set
+/// explicitly a value to then no generic solve parameters will overwrite this
+/// parameter. User specified solver specific parameters have priority on generic
+/// parameters.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlpkParametersProto {
+    /// Compute the primal or dual unbound ray when the variable (structural or
+    /// auxiliary) causing the unboundness is identified (see glp_get_unbnd_ray()).
+    ///
+    /// The unset value is equivalent to false.
+    ///
+    /// Rays are only available when solving linear programs, they are not
+    /// available for MIPs. On top of that they are only available when using a
+    /// simplex algorithm with the presolve disabled.
+    ///
+    /// A primal ray can only be built if the chosen LP algorithm is
+    /// LP_ALGORITHM_PRIMAL_SIMPLEX. Same for a dual ray and
+    /// LP_ALGORITHM_DUAL_SIMPLEX.
+    ///
+    /// The computation involves the basis factorization to be available which may
+    /// lead to extra computations/errors.
+    #[prost(bool, optional, tag = "1")]
+    pub compute_unbound_rays_if_possible: ::core::option::Option<bool>,
+}
+/// Parameters used to initialize the Gurobi solver.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GurobiInitializerProto {
+    /// An optional ISV key to use.
+    ///
+    /// See <http://www.gurobi.com/products/licensing-pricing/isv-program.>
+    #[prost(message, optional, tag = "1")]
+    pub isv_key: ::core::option::Option<gurobi_initializer_proto::IsvKey>,
+}
+/// Nested message and enum types in `GurobiInitializerProto`.
+pub mod gurobi_initializer_proto {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct IsvKey {
+        #[prost(string, tag = "1")]
+        pub name: ::prost::alloc::string::String,
+        #[prost(string, tag = "2")]
+        pub application_name: ::prost::alloc::string::String,
+        #[prost(int32, tag = "3")]
+        pub expiration: i32,
+        #[prost(string, tag = "4")]
+        pub key: ::prost::alloc::string::String,
+    }
+}
+/// Gurobi specific parameters for solving. See
+///    <https://www.gurobi.com/documentation/9.1/refman/parameters.html>
+/// for a list of possible parameters.
+///
+/// Example text proto to set the Barrier Iteration Limit:
+///    parameters : \[{name: "BarIterLimit" value: "10}\]
+///
+/// With Gurobi, the order that parameters are applied can have an impact in rare
+/// situations. Parameters are applied in the following order:
+///   * LogToConsole is set from CommonSolveParameters.enable_output.
+///   * Any common parameters not overwritten by GurobiParameters.
+///   * param_values in iteration order (insertion order).
+/// We set LogToConsole first because setting other parameters can generate
+/// output.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GurobiParametersProto {
+    #[prost(message, repeated, tag = "1")]
+    pub parameters: ::prost::alloc::vec::Vec<gurobi_parameters_proto::Parameter>,
+}
+/// Nested message and enum types in `GurobiParametersProto`.
+pub mod gurobi_parameters_proto {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Parameter {
+        #[prost(string, tag = "1")]
+        pub name: ::prost::alloc::string::String,
+        #[prost(string, tag = "2")]
+        pub value: ::prost::alloc::string::String,
+    }
+}
+/// The options exposed by HiGHS. Use at your own risk, these are completely
+/// undocumented.
+///
+/// Option names are given as strings in HighsOptions.h, see:
+/// <https://github.com/ERGO-Code/HiGHS/blob/7421e44b09563f637dc6422ea461a8832b29e543/src/lp_data/HighsOptions.h>
+/// Each member of HighsOptionsStruct has a corresponding OptionRecord with a
+/// string name (that appears to match the field name), use these as keys below.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HighsOptionsProto {
+    /// Example keys: "presolve", "solver", "parallel"
+    #[prost(map = "string, string", tag = "1")]
+    pub string_options: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    /// Example keys: "time_limit", "primal_feasibility_tolerance"
+    #[prost(map = "string, double", tag = "2")]
+    pub double_options: ::std::collections::HashMap<::prost::alloc::string::String, f64>,
+    /// Example keys: "random_seed", "simplex_strategy"
+    #[prost(map = "string, int32", tag = "3")]
+    pub int_options: ::std::collections::HashMap<::prost::alloc::string::String, i32>,
+    /// Example keys: "log_to_console", "allow_unbounded_or_infeasible"
+    #[prost(map = "string, bool", tag = "4")]
+    pub bool_options: ::std::collections::HashMap<::prost::alloc::string::String, bool>,
+}
+/// This proto mirrors the fields of OsqpSettings in
+/// osqp_cpp/include/osqp++.h, which in turn (nearly) mirrors the
+/// fields of OSQPSettings in osqp/include/types.h. See also
+/// <https://osqp.org/docs/interfaces/solver_settings.html> for documentation and
+/// default values. This proto must be kept in sync with logic in osqp_solver.cc.
+/// LINT.IfChange
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct OsqpSettingsProto {
+    /// ADMM rho step. Must be > 0.
+    #[prost(double, optional, tag = "1")]
+    pub rho: ::core::option::Option<f64>,
+    /// ADMM sigma step. Must be > 0.
+    #[prost(double, optional, tag = "2")]
+    pub sigma: ::core::option::Option<f64>,
+    /// Number of heuristic scaling iterations. Must be >= 0.
+    #[prost(int64, optional, tag = "3")]
+    pub scaling: ::core::option::Option<i64>,
+    /// Is rho step size adaptive?
+    #[prost(bool, optional, tag = "4")]
+    pub adaptive_rho: ::core::option::Option<bool>,
+    /// Number of iterations between rho adaptations; if 0, then automatically
+    /// selected. Must be >= 0.
+    #[prost(int64, optional, tag = "5")]
+    pub adaptive_rho_interval: ::core::option::Option<i64>,
+    /// Tolerance X for adapting rho: The new value must be X times larger or 1/X
+    /// times smaller than the current value. Must be >= 1.
+    #[prost(double, optional, tag = "6")]
+    pub adaptive_rho_tolerance: ::core::option::Option<f64>,
+    /// In automatic mode (adaptive_rho_interval = 0), what fraction of setup time
+    /// is spent on selecting rho. Must be >= 0.
+    #[prost(double, optional, tag = "7")]
+    pub adaptive_rho_fraction: ::core::option::Option<f64>,
+    /// Maximum number of iterations. Must be > 0.
+    #[prost(int64, optional, tag = "8")]
+    pub max_iter: ::core::option::Option<i64>,
+    /// Absolute error tolerance for convergence. Must be >= 0.
+    #[prost(double, optional, tag = "9")]
+    pub eps_abs: ::core::option::Option<f64>,
+    /// Relative error tolerance for convergence. Must be >= 0.
+    #[prost(double, optional, tag = "10")]
+    pub eps_rel: ::core::option::Option<f64>,
+    /// Absolute error tolerance for primal infeasibility. Must be >= 0.
+    #[prost(double, optional, tag = "11")]
+    pub eps_prim_inf: ::core::option::Option<f64>,
+    /// Relative error tolerance for dual infeasibility. Must be >= 0.
+    #[prost(double, optional, tag = "12")]
+    pub eps_dual_inf: ::core::option::Option<f64>,
+    /// ADMM overrelaxation parameter. Must be > 0 and < 2.
+    #[prost(double, optional, tag = "13")]
+    pub alpha: ::core::option::Option<f64>,
+    /// Polishing regularization parameter. Must be > 0.
+    #[prost(double, optional, tag = "14")]
+    pub delta: ::core::option::Option<f64>,
+    /// Perform polishing?
+    #[prost(bool, optional, tag = "15")]
+    pub polish: ::core::option::Option<bool>,
+    /// Number of refinement iterations in polishing. Must be > 0.
+    #[prost(int64, optional, tag = "16")]
+    pub polish_refine_iter: ::core::option::Option<i64>,
+    /// Print solver output?
+    #[prost(bool, optional, tag = "17")]
+    pub verbose: ::core::option::Option<bool>,
+    /// Use scaled termination criteria?
+    #[prost(bool, optional, tag = "18")]
+    pub scaled_termination: ::core::option::Option<bool>,
+    /// Interval for checking termination. If 0 or unset, termination checking is
+    /// disabled. Must be >= 0.
+    #[prost(int64, optional, tag = "19")]
+    pub check_termination: ::core::option::Option<i64>,
+    /// Perform warm starting?.
+    #[prost(bool, optional, tag = "20")]
+    pub warm_start: ::core::option::Option<bool>,
+    /// Run time limit in seconds. If 0 or unset, then no time limit. Must be >= 0.
+    #[prost(double, optional, tag = "21")]
+    pub time_limit: ::core::option::Option<f64>,
+}
+/// Solver-specific output for OSQP.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OsqpOutput {
+    /// Field is true if the underlying OSQP++ object was initialized for the
+    /// current solve, and false if the object was instead used incrementally. In
+    /// more detail, this tracks: was osqp::OsqpSolver::Init called on the
+    /// operations_research::math_opt::OsqpSolver::solver_ field at any point
+    /// during the solve process?
+    #[prost(bool, tag = "1")]
+    pub initialized_underlying_solver: bool,
+}
+/// Parameters used to initialize the Xpress solver.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct XpressInitializerProto {
+    #[prost(bool, optional, tag = "1")]
+    pub extract_names: ::core::option::Option<bool>,
+}
+/// Xpress specific parameters for solving. See
+///    <https://www.fico.com/fico-xpress-optimization/docs/latest/solver/optimizer/HTML/chapter7.html>
+/// for a list of possible parameters (called "controls" in Xpress).
+/// In addition to all Xpress controls, the following special parameters are
+/// also supported:
+///    "EXPORT_MODEL"(string)  If present then the low level Xpress model
+///                            (the XPRSprob instance) is written to that file
+///                            right before XPRSoptimize() is called. This can
+///                            be useful for debugging.
+///    "FORCE_POSTSOLVE"(int)  If set to a non-zero value then the low-level code
+///                            will call XPRSpostsolve() right after calling
+///                            XPRSoptimize(). If not set or set to zero then
+///                            calling XPRSpostsolve() is delayed to the latest
+///                            possible point in time to enable incremental
+///                            solves.
+///     "STOP_AFTER_LP"(int)   If set to a non-zero value then the solve will be
+///                            stopped right after solving the root relaxation.
+///                            This is the same as passing the ' l' (ell) flag
+///                            to XPRSoptimize() and stops the process earlier
+///                            than a limit like MAXNODE=0.
+///
+/// Example use:
+///    XpressParameters xpress;
+///    xpress.param_values\["BarIterLimit"\] = "10";
+///
+/// Parameters are applied in the following order:
+///   * Any parameters derived from ortools parameters (like LP algorithm).
+///   * param_values in iteration order (insertion order).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct XpressParametersProto {
+    #[prost(message, repeated, tag = "1")]
+    pub parameters: ::prost::alloc::vec::Vec<xpress_parameters_proto::Parameter>,
+}
+/// Nested message and enum types in `XpressParametersProto`.
+pub mod xpress_parameters_proto {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Parameter {
+        #[prost(string, tag = "1")]
+        pub name: ::prost::alloc::string::String,
+        #[prost(string, tag = "2")]
+        pub value: ::prost::alloc::string::String,
+    }
+}
+/// Configures if potentially bad solver input is a warning or an error.
+///
+/// TODO(b/196132970): implement this feature.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StrictnessProto {
+    #[prost(bool, tag = "1")]
+    pub bad_parameter: bool,
+}
+/// This message contains solver specific data that are used when the solver is
+/// instantiated.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SolverInitializerProto {
+    #[prost(message, optional, tag = "1")]
+    pub gurobi: ::core::option::Option<GurobiInitializerProto>,
+    #[prost(message, optional, tag = "3")]
+    pub xpress: ::core::option::Option<XpressInitializerProto>,
+}
+/// Parameters to control a single solve.
+///
+/// Contains both parameters common to all solvers e.g. time_limit, and
+/// parameters for a specific solver, e.g. gscip. If a value is set in both
+/// common and solver specific field, the solver specific setting is used.
+///
+/// The common parameters that are optional and unset or an enum with value
+/// unspecified indicate that the solver default is used.
+///
+/// Solver specific parameters for solvers other than the one in use are ignored.
+///
+/// Parameters that depends on the model (e.g. branching priority is set for
+/// each variable) are passed in ModelSolveParametersProto.
+///
+/// ////////////////////////////////////////////////////////////////////////////
+/// Parameters common to all solvers.
+/// ////////////////////////////////////////////////////////////////////////////
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SolveParametersProto {
+    /// Maximum time a solver should spend on the problem (or infinite if not set).
+    ///
+    /// This value is not a hard limit, solve time may slightly exceed this value.
+    /// This parameter is always passed to the underlying solver, the solver
+    /// default is not used.
+    #[prost(message, optional, tag = "1")]
+    pub time_limit: ::core::option::Option<::prost_types::Duration>,
+    /// Limit on the iterations of the underlying algorithm (e.g. simplex pivots).
+    /// The specific behavior is dependent on the solver and algorithm used, but
+    /// often can give a deterministic solve limit (further configuration may be
+    /// needed, e.g. one thread).
+    ///
+    /// Typically supported by LP, QP, and MIP solvers, but for MIP solvers see
+    /// also node_limit.
+    #[prost(int64, optional, tag = "2")]
+    pub iteration_limit: ::core::option::Option<i64>,
+    /// Limit on the number of subproblems solved in enumerative search (e.g.
+    /// branch and bound). For many solvers this can be used to deterministically
+    /// limit computation (further configuration may be needed, e.g. one thread).
+    ///
+    /// Typically for MIP solvers, see also iteration_limit.
+    #[prost(int64, optional, tag = "24")]
+    pub node_limit: ::core::option::Option<i64>,
+    /// The solver stops early if it can prove there are no primal solutions at
+    /// least as good as cutoff.
+    ///
+    /// On an early stop, the solver returns termination reason NO_SOLUTION_FOUND
+    /// and with limit CUTOFF and is not required to give any extra solution
+    /// information. Has no effect on the return value if there is no early stop.
+    ///
+    /// It is recommended that you use a tolerance if you want solutions with
+    /// objective exactly equal to cutoff to be returned.
+    ///
+    /// See the user guide for more details and a comparison with best_bound_limit.
+    #[prost(double, optional, tag = "20")]
+    pub cutoff_limit: ::core::option::Option<f64>,
+    /// The solver stops early as soon as it finds a solution at least this good,
+    /// with termination reason FEASIBLE and limit OBJECTIVE.
+    #[prost(double, optional, tag = "21")]
+    pub objective_limit: ::core::option::Option<f64>,
+    /// The solver stops early as soon as it proves the best bound is at least this
+    /// good, with termination reason FEASIBLE or NO_SOLUTION_FOUND and limit
+    /// OBJECTIVE.
+    ///
+    /// See the user guide for more details and a comparison with cutoff_limit.
+    #[prost(double, optional, tag = "22")]
+    pub best_bound_limit: ::core::option::Option<f64>,
+    /// The solver stops early after finding this many feasible solutions, with
+    /// termination reason FEASIBLE and limit SOLUTION. Must be greater than zero
+    /// if set. It is often used get the solver to stop on the first feasible
+    /// solution found. Note that there is no guarantee on the objective value for
+    /// any of the returned solutions.
+    ///
+    /// Solvers will typically not return more solutions than the solution limit,
+    /// but this is not enforced by MathOpt, see also b/214041169.
+    ///
+    /// Currently supported for Gurobi and SCIP, and for CP-SAT only with value 1.
+    #[prost(int32, optional, tag = "23")]
+    pub solution_limit: ::core::option::Option<i32>,
+    /// Enables printing the solver implementation traces. The location of those
+    /// traces depend on the solver. For SCIP and Gurobi this will be the standard
+    /// output streams. For Glop and CP-SAT this will LOG(INFO).
+    ///
+    /// Note that if the solver supports message callback and the user registers a
+    /// callback for it, then this parameter value is ignored and no traces are
+    /// printed.
+    #[prost(bool, tag = "3")]
+    pub enable_output: bool,
+    /// If set, it must be >= 1.
+    #[prost(int32, optional, tag = "4")]
+    pub threads: ::core::option::Option<i32>,
+    /// Seed for the pseudo-random number generator in the underlying
+    /// solver. Note that all solvers use pseudo-random numbers to select things
+    /// such as perturbation in the LP algorithm, for tie-break-up rules, and for
+    /// heuristic fixings. Varying this can have a noticeable impact on solver
+    /// behavior.
+    ///
+    /// Although all solvers have a concept of seeds, note that valid values
+    /// depend on the actual solver.
+    /// - Gurobi: \[0:GRB_MAXINT\] (which as of Gurobi 9.0 is 2x10^9).
+    /// - GSCIP:  \[0:2147483647\] (which is MAX_INT or kint32max or 2^31-1).
+    /// - GLOP:   \[0:2147483647\] (same as above)
+    /// In all cases, the solver will receive a value equal to:
+    /// MAX(0, MIN(MAX_VALID_VALUE_FOR_SOLVER, random_seed)).
+    #[prost(int32, optional, tag = "5")]
+    pub random_seed: ::core::option::Option<i32>,
+    /// An absolute optimality tolerance (primarily) for MIP solvers.
+    ///
+    /// The absolute GAP is the absolute value of the difference between:
+    ///    * the objective value of the best feasible solution found,
+    ///    * the dual bound produced by the search.
+    /// The solver can stop once the absolute GAP is at most absolute_gap_tolerance
+    /// (when set), and return TERMINATION_REASON_OPTIMAL.
+    ///
+    /// Must be >= 0 if set.
+    ///
+    /// See also relative_gap_tolerance.
+    #[prost(double, optional, tag = "18")]
+    pub absolute_gap_tolerance: ::core::option::Option<f64>,
+    /// A relative optimality tolerance (primarily) for MIP solvers.
+    ///
+    /// The relative GAP is a normalized version of the absolute GAP (defined on
+    /// absolute_gap_tolerance), where the normalization is solver-dependent, e.g.
+    /// the absolute GAP divided by the objective value of the best feasible
+    /// solution found.
+    ///
+    /// The solver can stop once the relative GAP is at most relative_gap_tolerance
+    /// (when set), and return TERMINATION_REASON_OPTIMAL.
+    ///
+    /// Must be >= 0 if set.
+    ///
+    /// See also absolute_gap_tolerance.
+    #[prost(double, optional, tag = "17")]
+    pub relative_gap_tolerance: ::core::option::Option<f64>,
+    /// Maintain up to `solution_pool_size` solutions while searching. The solution
+    /// pool generally has two functions:
+    ///   (1) For solvers that can return more than one solution, this limits how
+    ///       many solutions will be returned.
+    ///   (2) Some solvers may run heuristics using solutions from the solution
+    ///       pool, so changing this value may affect the algorithm's path.
+    /// To force the solver to fill the solution pool, e.g. with the n best
+    /// solutions, requires further, solver specific configuration.
+    #[prost(int32, optional, tag = "25")]
+    pub solution_pool_size: ::core::option::Option<i32>,
+    /// The algorithm for solving a linear program. If LP_ALGORITHM_UNSPECIFIED,
+    /// use the solver default algorithm.
+    ///
+    /// For problems that are not linear programs but where linear programming is
+    /// a subroutine, solvers may use this value. E.g. MIP solvers will typically
+    /// use this for the root LP solve only (and use dual simplex otherwise).
+    #[prost(enumeration = "LpAlgorithmProto", tag = "6")]
+    pub lp_algorithm: i32,
+    /// Effort on simplifying the problem before starting the main algorithm, or
+    /// the solver default effort level if EMPHASIS_UNSPECIFIED.
+    #[prost(enumeration = "EmphasisProto", tag = "7")]
+    pub presolve: i32,
+    /// Effort on getting a stronger LP relaxation (MIP only), or the solver
+    /// default effort level if EMPHASIS_UNSPECIFIED.
+    ///
+    /// NOTE: disabling cuts may prevent callbacks from having a chance to add cuts
+    /// at MIP_NODE, this behavior is solver specific.
+    #[prost(enumeration = "EmphasisProto", tag = "8")]
+    pub cuts: i32,
+    /// Effort in finding feasible solutions beyond those encountered in the
+    /// complete search procedure (MIP only), or the solver default effort level if
+    /// EMPHASIS_UNSPECIFIED.
+    #[prost(enumeration = "EmphasisProto", tag = "9")]
+    pub heuristics: i32,
+    /// Effort in rescaling the problem to improve numerical stability, or the
+    /// solver default effort level if EMPHASIS_UNSPECIFIED.
+    #[prost(enumeration = "EmphasisProto", tag = "10")]
+    pub scaling: i32,
+    #[prost(message, optional, tag = "12")]
+    pub gscip: ::core::option::Option<super::GScipParameters>,
+    #[prost(message, optional, tag = "13")]
+    pub gurobi: ::core::option::Option<GurobiParametersProto>,
+    #[prost(message, optional, tag = "14")]
+    pub glop: ::core::option::Option<super::glop::GlopParameters>,
+    #[prost(message, optional, tag = "15")]
+    pub cp_sat: ::core::option::Option<super::sat::SatParameters>,
+    #[prost(message, optional, tag = "16")]
+    pub pdlp: ::core::option::Option<super::pdlp::PrimalDualHybridGradientParams>,
+    /// Users should prefer the generic MathOpt parameters over OSQP-level
+    /// parameters, when available:
+    ///    * Prefer SolveParametersProto.enable_output to OsqpSettingsProto.verbose.
+    ///    * Prefer SolveParametersProto.time_limit to OsqpSettingsProto.time_limit.
+    ///    * Prefer SolveParametersProto.iteration_limit to
+    ///      OsqpSettingsProto.iteration_limit.
+    ///    * If a less granular configuration is acceptable, prefer
+    ///      SolveParametersProto.scaling to OsqpSettingsProto.
+    #[prost(message, optional, tag = "19")]
+    pub osqp: ::core::option::Option<OsqpSettingsProto>,
+    #[prost(message, optional, tag = "26")]
+    pub glpk: ::core::option::Option<GlpkParametersProto>,
+    #[prost(message, optional, tag = "27")]
+    pub highs: ::core::option::Option<HighsOptionsProto>,
+    #[prost(message, optional, tag = "28")]
+    pub xpress: ::core::option::Option<XpressParametersProto>,
+}
+/// The solvers supported by MathOpt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SolverTypeProto {
+    SolverTypeUnspecified = 0,
+    /// Solving Constraint Integer Programs (SCIP) solver (third party).
+    ///
+    /// Supports LP, MIP, and nonconvex integer quadratic problems. No dual data
+    /// for LPs is returned though. Prefer GLOP for LPs.
+    SolverTypeGscip = 1,
+    /// Gurobi solver (third party).
+    ///
+    /// Supports LP, MIP, and nonconvex integer quadratic problems. Generally the
+    /// fastest option, but has special licensing.
+    SolverTypeGurobi = 2,
+    /// Google's Glop solver.
+    ///
+    /// Supports LP with primal and dual simplex methods.
+    SolverTypeGlop = 3,
+    /// Google's CP-SAT solver.
+    ///
+    /// Supports problems where all variables are integer and bounded (or implied
+    /// to be after presolve). Experimental support to rescale and discretize
+    /// problems with continuous variables.
+    SolverTypeCpSat = 4,
+    /// Google's PDLP solver.
+    ///
+    /// Supports LP and convex diagonal quadratic objectives. Uses first order
+    /// methods rather than simplex. Can solve very large problems.
+    SolverTypePdlp = 5,
+    /// GNU Linear Programming Kit (GLPK) (third party).
+    ///
+    /// Supports MIP and LP.
+    ///
+    /// Thread-safety: GLPK use thread-local storage for memory allocations. As a
+    /// consequence Solver instances must be destroyed on the same thread as they
+    /// are created or GLPK will crash. It seems OK to call Solver::Solve() from
+    /// another thread than the one used to create the Solver but it is not
+    /// documented by GLPK and should be avoided.
+    ///
+    /// When solving a LP with the presolver, a solution (and the unbound rays) are
+    /// only returned if an optimal solution has been found. Else nothing is
+    /// returned. See glpk-5.0/doc/glpk.pdf page #40 available from glpk-5.0.tar.gz
+    /// for details.
+    SolverTypeGlpk = 6,
+    /// The Operator Splitting Quadratic Program (OSQP) solver (third party).
+    ///
+    /// Supports continuous problems with linear constraints and linear or convex
+    /// quadratic objectives. Uses a first-order method.
+    SolverTypeOsqp = 7,
+    /// The Embedded Conic Solver (ECOS) (third party).
+    ///
+    /// Supports LP and SOCP problems. Uses interior point methods (barrier).
+    SolverTypeEcos = 8,
+    /// The Splitting Conic Solver (SCS) (third party).
+    ///
+    /// Supports LP and SOCP problems. Uses a first-order method.
+    SolverTypeScs = 9,
+    /// The HiGHS Solver (third party).
+    ///
+    /// Supports LP and MIP problems (convex QPs are unimplemented).
+    SolverTypeHighs = 10,
+    /// MathOpt's reference implementation of a MIP solver.
+    ///
+    /// Slow/not recommended for production. Not an LP solver (no dual information
+    /// returned).
+    SolverTypeSantorini = 11,
+    /// Fico XPRESS solver (third party).
+    ///
+    /// Supports LP, MIP, and nonconvex integer quadratic problems.
+    /// A fast option, but has special licensing.
+    SolverTypeXpress = 13,
+}
+impl SolverTypeProto {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::SolverTypeUnspecified => "SOLVER_TYPE_UNSPECIFIED",
+            Self::SolverTypeGscip => "SOLVER_TYPE_GSCIP",
+            Self::SolverTypeGurobi => "SOLVER_TYPE_GUROBI",
+            Self::SolverTypeGlop => "SOLVER_TYPE_GLOP",
+            Self::SolverTypeCpSat => "SOLVER_TYPE_CP_SAT",
+            Self::SolverTypePdlp => "SOLVER_TYPE_PDLP",
+            Self::SolverTypeGlpk => "SOLVER_TYPE_GLPK",
+            Self::SolverTypeOsqp => "SOLVER_TYPE_OSQP",
+            Self::SolverTypeEcos => "SOLVER_TYPE_ECOS",
+            Self::SolverTypeScs => "SOLVER_TYPE_SCS",
+            Self::SolverTypeHighs => "SOLVER_TYPE_HIGHS",
+            Self::SolverTypeSantorini => "SOLVER_TYPE_SANTORINI",
+            Self::SolverTypeXpress => "SOLVER_TYPE_XPRESS",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SOLVER_TYPE_UNSPECIFIED" => Some(Self::SolverTypeUnspecified),
+            "SOLVER_TYPE_GSCIP" => Some(Self::SolverTypeGscip),
+            "SOLVER_TYPE_GUROBI" => Some(Self::SolverTypeGurobi),
+            "SOLVER_TYPE_GLOP" => Some(Self::SolverTypeGlop),
+            "SOLVER_TYPE_CP_SAT" => Some(Self::SolverTypeCpSat),
+            "SOLVER_TYPE_PDLP" => Some(Self::SolverTypePdlp),
+            "SOLVER_TYPE_GLPK" => Some(Self::SolverTypeGlpk),
+            "SOLVER_TYPE_OSQP" => Some(Self::SolverTypeOsqp),
+            "SOLVER_TYPE_ECOS" => Some(Self::SolverTypeEcos),
+            "SOLVER_TYPE_SCS" => Some(Self::SolverTypeScs),
+            "SOLVER_TYPE_HIGHS" => Some(Self::SolverTypeHighs),
+            "SOLVER_TYPE_SANTORINI" => Some(Self::SolverTypeSantorini),
+            "SOLVER_TYPE_XPRESS" => Some(Self::SolverTypeXpress),
+            _ => None,
+        }
+    }
+}
+/// Selects an algorithm for solving linear programs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum LpAlgorithmProto {
+    LpAlgorithmUnspecified = 0,
+    /// The (primal) simplex method. Typically can provide primal and dual
+    /// solutions, primal/dual rays on primal/dual unbounded problems, and a basis.
+    LpAlgorithmPrimalSimplex = 1,
+    /// The dual simplex method. Typically can provide primal and dual
+    /// solutions, primal/dual rays on primal/dual unbounded problems, and a basis.
+    LpAlgorithmDualSimplex = 2,
+    /// The barrier method, also commonly called an interior point method (IPM).
+    /// Can typically give both primal and dual solutions. Some implementations can
+    /// also produce rays on unbounded/infeasible problems. A basis is not given
+    /// unless the underlying solver does "crossover" and finishes with simplex.
+    LpAlgorithmBarrier = 3,
+    /// An algorithm based around a first-order method. These will typically
+    /// produce both primal and dual solutions, and potentially also certificates
+    /// of primal and/or dual infeasibility. First-order methods typically will
+    /// provide solutions with lower accuracy, so users should take care to set
+    /// solution quality parameters (e.g., tolerances) and to validate solutions.
+    LpAlgorithmFirstOrder = 4,
+}
+impl LpAlgorithmProto {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::LpAlgorithmUnspecified => "LP_ALGORITHM_UNSPECIFIED",
+            Self::LpAlgorithmPrimalSimplex => "LP_ALGORITHM_PRIMAL_SIMPLEX",
+            Self::LpAlgorithmDualSimplex => "LP_ALGORITHM_DUAL_SIMPLEX",
+            Self::LpAlgorithmBarrier => "LP_ALGORITHM_BARRIER",
+            Self::LpAlgorithmFirstOrder => "LP_ALGORITHM_FIRST_ORDER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "LP_ALGORITHM_UNSPECIFIED" => Some(Self::LpAlgorithmUnspecified),
+            "LP_ALGORITHM_PRIMAL_SIMPLEX" => Some(Self::LpAlgorithmPrimalSimplex),
+            "LP_ALGORITHM_DUAL_SIMPLEX" => Some(Self::LpAlgorithmDualSimplex),
+            "LP_ALGORITHM_BARRIER" => Some(Self::LpAlgorithmBarrier),
+            "LP_ALGORITHM_FIRST_ORDER" => Some(Self::LpAlgorithmFirstOrder),
+            _ => None,
+        }
+    }
+}
+/// Effort level applied to an optional task while solving (see
+/// SolveParametersProto for use).
+///
+/// Emphasis is used to configure a solver feature as follows:
+///   * If a solver doesn't support the feature, only UNSPECIFIED will always be
+///     valid, any other setting will typically an invalid argument error (some
+///     solvers may also accept OFF).
+///   * If the solver supports the feature:
+///     - When set to UNSPECIFIED, the underlying default is used.
+///     - When the feature cannot be turned off, OFF will return an error.
+///     - If the feature is enabled by default, the solver default is typically
+///       mapped to MEDIUM.
+///     - If the feature is supported, LOW, MEDIUM, HIGH, and VERY HIGH will never
+///       give an error, and will map onto their best match.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum EmphasisProto {
+    EmphasisUnspecified = 0,
+    EmphasisOff = 1,
+    EmphasisLow = 2,
+    EmphasisMedium = 3,
+    EmphasisHigh = 4,
+    EmphasisVeryHigh = 5,
+}
+impl EmphasisProto {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::EmphasisUnspecified => "EMPHASIS_UNSPECIFIED",
+            Self::EmphasisOff => "EMPHASIS_OFF",
+            Self::EmphasisLow => "EMPHASIS_LOW",
+            Self::EmphasisMedium => "EMPHASIS_MEDIUM",
+            Self::EmphasisHigh => "EMPHASIS_HIGH",
+            Self::EmphasisVeryHigh => "EMPHASIS_VERY_HIGH",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "EMPHASIS_UNSPECIFIED" => Some(Self::EmphasisUnspecified),
+            "EMPHASIS_OFF" => Some(Self::EmphasisOff),
+            "EMPHASIS_LOW" => Some(Self::EmphasisLow),
+            "EMPHASIS_MEDIUM" => Some(Self::EmphasisMedium),
+            "EMPHASIS_HIGH" => Some(Self::EmphasisHigh),
+            "EMPHASIS_VERY_HIGH" => Some(Self::EmphasisVeryHigh),
+            _ => None,
+        }
+    }
+}
 /// A solution to an optimization problem.
 ///
 /// E.g. consider a simple linear program:
@@ -667,93 +1337,6 @@ impl BasisStatusProto {
             _ => None,
         }
     }
-}
-/// This proto mirrors the fields of OsqpSettings in
-/// osqp_cpp/include/osqp++.h, which in turn (nearly) mirrors the
-/// fields of OSQPSettings in osqp/include/types.h. See also
-/// <https://osqp.org/docs/interfaces/solver_settings.html> for documentation and
-/// default values. This proto must be kept in sync with logic in osqp_solver.cc.
-/// LINT.IfChange
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct OsqpSettingsProto {
-    /// ADMM rho step. Must be > 0.
-    #[prost(double, optional, tag = "1")]
-    pub rho: ::core::option::Option<f64>,
-    /// ADMM sigma step. Must be > 0.
-    #[prost(double, optional, tag = "2")]
-    pub sigma: ::core::option::Option<f64>,
-    /// Number of heuristic scaling iterations. Must be >= 0.
-    #[prost(int64, optional, tag = "3")]
-    pub scaling: ::core::option::Option<i64>,
-    /// Is rho step size adaptive?
-    #[prost(bool, optional, tag = "4")]
-    pub adaptive_rho: ::core::option::Option<bool>,
-    /// Number of iterations between rho adaptations; if 0, then automatically
-    /// selected. Must be >= 0.
-    #[prost(int64, optional, tag = "5")]
-    pub adaptive_rho_interval: ::core::option::Option<i64>,
-    /// Tolerance X for adapting rho: The new value must be X times larger or 1/X
-    /// times smaller than the current value. Must be >= 1.
-    #[prost(double, optional, tag = "6")]
-    pub adaptive_rho_tolerance: ::core::option::Option<f64>,
-    /// In automatic mode (adaptive_rho_interval = 0), what fraction of setup time
-    /// is spent on selecting rho. Must be >= 0.
-    #[prost(double, optional, tag = "7")]
-    pub adaptive_rho_fraction: ::core::option::Option<f64>,
-    /// Maximum number of iterations. Must be > 0.
-    #[prost(int64, optional, tag = "8")]
-    pub max_iter: ::core::option::Option<i64>,
-    /// Absolute error tolerance for convergence. Must be >= 0.
-    #[prost(double, optional, tag = "9")]
-    pub eps_abs: ::core::option::Option<f64>,
-    /// Relative error tolerance for convergence. Must be >= 0.
-    #[prost(double, optional, tag = "10")]
-    pub eps_rel: ::core::option::Option<f64>,
-    /// Absolute error tolerance for primal infeasibility. Must be >= 0.
-    #[prost(double, optional, tag = "11")]
-    pub eps_prim_inf: ::core::option::Option<f64>,
-    /// Relative error tolerance for dual infeasibility. Must be >= 0.
-    #[prost(double, optional, tag = "12")]
-    pub eps_dual_inf: ::core::option::Option<f64>,
-    /// ADMM overrelaxation parameter. Must be > 0 and < 2.
-    #[prost(double, optional, tag = "13")]
-    pub alpha: ::core::option::Option<f64>,
-    /// Polishing regularization parameter. Must be > 0.
-    #[prost(double, optional, tag = "14")]
-    pub delta: ::core::option::Option<f64>,
-    /// Perform polishing?
-    #[prost(bool, optional, tag = "15")]
-    pub polish: ::core::option::Option<bool>,
-    /// Number of refinement iterations in polishing. Must be > 0.
-    #[prost(int64, optional, tag = "16")]
-    pub polish_refine_iter: ::core::option::Option<i64>,
-    /// Print solver output?
-    #[prost(bool, optional, tag = "17")]
-    pub verbose: ::core::option::Option<bool>,
-    /// Use scaled termination criteria?
-    #[prost(bool, optional, tag = "18")]
-    pub scaled_termination: ::core::option::Option<bool>,
-    /// Interval for checking termination. If 0 or unset, termination checking is
-    /// disabled. Must be >= 0.
-    #[prost(int64, optional, tag = "19")]
-    pub check_termination: ::core::option::Option<i64>,
-    /// Perform warm starting?.
-    #[prost(bool, optional, tag = "20")]
-    pub warm_start: ::core::option::Option<bool>,
-    /// Run time limit in seconds. If 0 or unset, then no time limit. Must be >= 0.
-    #[prost(double, optional, tag = "21")]
-    pub time_limit: ::core::option::Option<f64>,
-}
-/// Solver-specific output for OSQP.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct OsqpOutput {
-    /// Field is true if the underlying OSQP++ object was initialized for the
-    /// current solve, and false if the object was instead used incrementally. In
-    /// more detail, this tracks: was osqp::OsqpSolver::Init called on the
-    /// operations_research::math_opt::OsqpSolver::solver_ field at any point
-    /// during the solve process?
-    #[prost(bool, tag = "1")]
-    pub initialized_underlying_solver: bool,
 }
 /// Feasibility status of the primal problem and its dual (or the dual of a
 /// continuous relaxation) as claimed by the solver. The solver is not required
