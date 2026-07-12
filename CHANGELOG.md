@@ -17,15 +17,37 @@ published to crates.io.
   interruptible solves (`StopToken`/`Stopper`); solution enumeration;
   interval/no-overlap/cumulative scheduling constraints;
   `add_max_equality`/`add_min_equality` for fairness objectives.
+- CP-SAT, full constraint catalog: `element`, allowed/forbidden assignment
+  tables, `circuit`/`multiple_circuit`, automaton, reservoir (with optional
+  events), `no_overlap_2d`, integer product/division/modulo, absolute value,
+  `bool_xor`, inverse permutations — plus solution hints and assumptions.
+- CP-SAT streaming solution callbacks (`callbacks` feature):
+  `solve_with_solution_callback` observes every feasible solution as the
+  search finds it; `ControlFlow::Break` stops the search early, and callback
+  panics resume safely on the calling thread after the solver winds down.
+- CP-SAT raw-proto solve (`solve_model_proto`,
+  `solve_model_proto_interruptible`): the write side of the wire-level
+  escape hatch for hand-built or hand-modified `CpModelProto`s.
 - MathOpt (`oxidor-mathopt`): LP/MIP model builder; per-call solver choice
   (Glop, SCIP, CP-SAT, PDLP); cross-thread interruption
   (`SolveInterrupter`); `primal_solution()` returns only solver-certified
   feasible solutions.
+- MathOpt per-solve parameters: `solve_with_parameters`
+  (`SolveParametersProto` — limits, gap tolerances, threads, seed),
+  `solve_with_time_limit`, and `registered_solvers()` to probe which
+  backends the linked library ships; an unregistered solver is a clean
+  `SolveError`. Solves now route through Oxidor's C shim (the upstream
+  MathOpt C API takes no per-solve parameters).
 - Routing (`oxidor-routing`): TSP and capacitated VRP over a distance
   matrix through an exception-safe C++ shim; search parameters as protos;
   `solve_with_time_limit`.
+- Routing, richer problems: `TimeDimension` (travel times, service times,
+  per-node time windows, waiting) with per-stop arrival times in the
+  solution; pickup-and-delivery pairs (same vehicle, pickup first);
+  per-vehicle fixed costs.
 - Algorithms (`oxidor-algorithms`): 0-1 knapsack (multi-dimensional branch
-  and bound), max flow, min cost flow.
+  and bound), max flow, min cost flow, linear sum assignment
+  (`LinearSumAssignment` — minimum-cost perfect matching).
 - Distribution: `download-prebuilt` — a SHA-256-pinned static OR-Tools
   bundle fetched from this project's releases at build time (three targets),
   end-to-end tested in CI; `ORTOOLS_PREFIX` dynamic linking; pure-Rust model

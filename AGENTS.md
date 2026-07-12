@@ -6,12 +6,13 @@ architecture and setup.
 ## Commands
 
 - Test: `cargo test --workspace` (needs `.ortools/v9.15` — see README
-  *Development*; `.cargo/config.toml` points `ORTOOLS_PREFIX` at it; the
-  routing/algorithms crates compile the C++ shim, so a C++20 compiler is
-  required too). Note: an explicit `cargo test --workspace --doc` fails in
-  `oxidor-protos` (upstream proto comments are not Rust; the crate sets
-  `doctest = false`, which `--doc` overrides) — the plain workspace test is
-  the supported entry point.
+  *Development*; `.cargo/config.toml` points `ORTOOLS_PREFIX` at it; solving
+  compiles the C++ shim, so a C++20 compiler is required too). The umbrella's
+  default features enable `oxidor-cpsat/callbacks`, so feature unification
+  runs the callback tests in the plain workspace test. Note: an explicit
+  `cargo test --workspace --doc` fails in `oxidor-protos` (upstream proto
+  comments are not Rust; the crate sets `doctest = false`, which `--doc`
+  overrides) — the plain workspace test is the supported entry point.
 - Lint: `cargo clippy --workspace --all-targets` (keep it warning-clean) and
   `cargo fmt --all --check`
 - Regenerate protos: `cargo run -p xtask -- gen-protos` (commit the output)
@@ -32,15 +33,17 @@ architecture and setup.
 
 ## Design invariants
 
-- **The FFI boundary is serialized protos only.** Models cross into the
-  native library as proto bytes through the official C APIs — CP-SAT
-  (`ortools/sat/c_api/cp_solver_c.h`) and MathOpt
-  (`ortools/math_opt/core/c_api/solver.h`), both declared in `oxidor-sys` —
-  and results come back as proto bytes. No C++ type ever surfaces in any
-  public API. CP-SAT buffers are freed with the C allocator (`libc::free`);
-  MathOpt buffers with `MathOptFree`. Output buffers are copied out and
-  **freed before decoding**, so a decode panic cannot leak them; null/empty
-  outputs are tolerated defensively.
+- **The FFI boundary is serialized protos and POD only.** Models cross into
+  the native library as proto bytes — CP-SAT through the official C API
+  (`ortools/sat/c_api/cp_solver_c.h`), MathOpt through the shim (the
+  official C API takes no per-solve parameters, so `oxidor-mathopt`'s
+  `solve` requires `oxidor-sys/shim`) — and results come back as proto
+  bytes. No C++ type ever surfaces in any public API. Buffers from the C API
+  and the shim are freed with the C allocator (`libc::free`); the (unused by
+  our crates, still declared) upstream MathOpt C API frees with
+  `MathOptFree`. Output buffers are copied out and **freed before
+  decoding**, so a decode panic cannot leak them; null/empty outputs are
+  tolerated defensively.
 - **Validate inputs before they reach native code.** Anything upstream
   documents as a precondition (non-negative capacities/demands/costs, node
   indices within `i32`, buffer lengths within `c_int`) is checked on the Rust
@@ -58,19 +61,28 @@ architecture and setup.
   take `&mut StopToken`; only `Stopper` clones (which can merely stop) cross
   threads. Never reintroduce a shared-token solve path.
 - **C++ exceptions cannot cross the boundary.** A thrown exception aborts the
-  process (seen with MathOpt solver types whose backend isn't linked). Never
-  add an API whose misuse triggers one when a clean status path exists;
-  document the hazard when upstream leaves no choice (see
-  `SolverType`'s docs).
-- **The shim owns the C boundary for callback-free bridging.** APIs without
-  an upstream C API (routing, knapsack, flows) go through
-  `oxidor-sys/cpp/oxidor_shim.cc`, compiled under the sys `shim` feature
-  against the installation's headers (with the compile definitions the
-  official CMake config exports — see build.rs). Shim rules: POD arrays and
-  serialized protos only; every entry point wrapped in try/catch; outputs
-  malloc-allocated and freed by the Rust side with `libc::free`. A new entry
-  point means updating the `.cc`, the `#[cfg(feature = "shim")]` decls in
-  sys, and this file together. The shim also links the unversioned
+  process. Every shim entry point is wrapped in try/catch; never add an API
+  whose misuse triggers an uncaught throw when a clean status path exists.
+- **Rust panics cannot cross the boundary either.** Any Rust closure invoked
+  from native code (the CP-SAT solution-callback trampoline in
+  `oxidor-cpsat/src/callbacks.rs`) runs behind `catch_unwind`; the caught
+  payload asks the search to stop, is carried back across the FFI return,
+  and resumes on the calling thread. A new callback-style entry point must
+  copy this pattern: `extern "C"` trampoline + `user_data` state struct +
+  panic barrier + `Send` bound (solvers may call from worker threads).
+- **The shim owns the C boundary where the upstream C API is missing or too
+  narrow** (routing, knapsack, flows, assignment, MathOpt parameters, CP-SAT
+  observers): `oxidor-sys/cpp/oxidor_shim.cc`, compiled under the sys `shim`
+  feature against the installation's headers (with the compile definitions
+  the official CMake config exports — see build.rs). Shim rules: POD
+  scalars/arrays, serialized protos, and C function pointers only; every
+  entry point wrapped in try/catch; outputs malloc-allocated and freed by
+  the Rust side with `libc::free`. A new entry point means updating the
+  `.cc`, the `#[cfg(feature = "shim")]` decls in sys, and this file
+  together. Structured requests may cross as `#[repr(C)]` structs mirrored
+  field-for-field in the `.cc` (see `OxidorRoutingProblem`) — safe because
+  both sides ship in one crate and compile in lockstep; it is an internal
+  contract, not a wire format. The shim also links the unversioned
   absl/protobuf shared libraries next to libortools (inlined template code;
   the linker won't resolve those transitively).
 - **Generated proto code is committed.** `oxidor-protos/src/generated/` is
@@ -82,6 +94,9 @@ architecture and setup.
   in `oxidor-sys`/linking. `--no-default-features` must always build without
   any native library present. (`oxidor-algorithms` is the exception: it is
   FFI calls only, with no pure-model subset — enabling it always links.)
+  `oxidor-cpsat`'s `callbacks` feature is additive on top of `solve` (it
+  adds the shim); keep it optional there, but the umbrella enables it by
+  default.
 - **`i64::MIN`/`i64::MAX` are CP-SAT's ±infinity sentinels.** Domain
   arithmetic (e.g. constant folding in `add_linear_constraint`) pins them
   instead of shifting, matching the C++ CpModelBuilder.
