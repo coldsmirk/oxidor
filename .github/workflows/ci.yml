@@ -73,9 +73,12 @@ jobs:
       - name: End-to-end download-prebuilt (static bundle from our release)
         # Empty ORTOOLS_PREFIX forces the download path; this exercises the
         # real release asset, the SHA-256 gate, static linking, and — through
-        # routing/algorithms — the shim compiled against the bundle headers.
+        # routing/algorithms/callbacks — every shim entry point compiled
+        # against the bundle headers (MathOpt excepted: its solver registry
+        # needs the dynamic library, covered by the workspace test above).
         run: >
           cargo test -p oxidor-cpsat -p oxidor-routing -p oxidor-algorithms
-          --features oxidor-sys/download-prebuilt --test solve
+          --features oxidor-sys/download-prebuilt,oxidor-cpsat/callbacks
+          --test solve --test callbacks
         env:
           ORTOOLS_PREFIX: ""
