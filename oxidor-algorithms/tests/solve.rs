@@ -150,3 +150,58 @@ fn min_cost_flow_rejects_a_negative_capacity() {
     let error = graph.solve().unwrap_err();
     assert!(matches!(error, AlgorithmError::InvalidInput(_)));
 }
+
+#[test]
+fn assignment_finds_the_minimum_cost_perfect_matching() {
+    // Mirrors the crate-level doc example so its golden value runs in CI.
+    let mut assignment = oxidor_algorithms::LinearSumAssignment::new();
+    let costs = [[4, 1, 3], [2, 0, 5], [3, 2, 2]];
+    for (left, row) in costs.iter().enumerate() {
+        for (right, &cost) in row.iter().enumerate() {
+            assignment.add_arc_with_cost(left as u32, right as u32, cost);
+        }
+    }
+
+    let response = assignment.solve().expect("runs");
+
+    assert_eq!(
+        response.status(),
+        oxidor_algorithms::AssignmentStatus::Optimal
+    );
+    let solution = response.solution().expect("a perfect matching exists");
+    // left 0 → right 1 (1), left 1 → right 0 (2), left 2 → right 2 (2).
+    assert_eq!(solution.total_cost(), 5);
+    let mates: Vec<(u32, u32)> = solution.assignments().collect();
+    assert_eq!(mates, vec![(0, 1), (1, 0), (2, 2)]);
+    assert_eq!(solution.right_mate(2), 2);
+}
+
+#[test]
+fn assignment_accepts_negative_costs() {
+    let mut assignment = oxidor_algorithms::LinearSumAssignment::new();
+    assignment.add_arc_with_cost(0, 0, -5);
+    assignment.add_arc_with_cost(0, 1, 10);
+    assignment.add_arc_with_cost(1, 0, 10);
+    assignment.add_arc_with_cost(1, 1, -3);
+
+    let response = assignment.solve().expect("runs");
+
+    let solution = response.solution().expect("a perfect matching exists");
+    assert_eq!(solution.total_cost(), -8);
+}
+
+#[test]
+fn a_missing_perfect_matching_is_an_outcome_not_an_error() {
+    // Right node 1 has no incoming arc: no perfect matching on two nodes.
+    let mut assignment = oxidor_algorithms::LinearSumAssignment::new();
+    assignment.add_arc_with_cost(0, 0, 1);
+    assignment.add_arc_with_cost(1, 0, 1);
+
+    let response = assignment.solve().expect("the solve itself runs");
+
+    assert_eq!(
+        response.status(),
+        oxidor_algorithms::AssignmentStatus::Infeasible
+    );
+    assert!(response.solution().is_none());
+}

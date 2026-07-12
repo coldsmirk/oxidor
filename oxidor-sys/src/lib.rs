@@ -425,4 +425,24 @@ unsafe extern "C" {
         out_total_cost: *mut i64,
         error_message: *mut *mut c_char,
     ) -> i32;
+
+    /// Solves a linear sum assignment; returns the
+    /// `SimpleLinearSumAssignment` status (0 = OPTIMAL, 1 = INFEASIBLE,
+    /// 2 = POSSIBLE_OVERFLOW) or -1 on a caught C++ exception.
+    /// `*out_optimal_cost` and `out_right_mates` are written only on OPTIMAL.
+    ///
+    /// # Safety
+    ///
+    /// Arc arrays must be valid for `num_arcs` entries; `out_right_mates`
+    /// must be writable for one entry per node (one greater than the largest
+    /// node index in the arcs); the caller frees `*error_message`.
+    pub fn OxidorAssignmentSolve(
+        left_nodes: *const i32,
+        right_nodes: *const i32,
+        costs: *const i64,
+        num_arcs: i32,
+        out_optimal_cost: *mut i64,
+        out_right_mates: *mut i32,
+        error_message: *mut *mut c_char,
+    ) -> i32;
 }

@@ -612,3 +612,45 @@ int32_t* OxidorMathOptRegisteredSolvers(int32_t* out_len,
 }
 
 }  // extern "C"
+
+#include "ortools/graph/assignment.h"
+
+extern "C" {
+
+// Solves a linear sum assignment over arcs (left_nodes[i] -> right_nodes[i])
+// with the given costs (any sign). `out_right_mates` receives, for each left
+// node in [0, num_nodes), its assigned right node; the caller sizes it as
+// one greater than the largest node index (exactly upstream's NumNodes()).
+// `*out_optimal_cost` and the mates are written only on OPTIMAL. Returns the
+// SimpleLinearSumAssignment status (0 = OPTIMAL, 1 = INFEASIBLE,
+// 2 = POSSIBLE_OVERFLOW), or -1 on a caught C++ exception (with
+// `*error_message` set, malloc'd).
+int32_t OxidorAssignmentSolve(const int32_t* left_nodes,
+                              const int32_t* right_nodes, const int64_t* costs,
+                              int32_t num_arcs, int64_t* out_optimal_cost,
+                              int32_t* out_right_mates, char** error_message) {
+  *error_message = nullptr;
+  try {
+    operations_research::SimpleLinearSumAssignment assignment;
+    assignment.ReserveArcs(num_arcs);
+    for (int32_t arc = 0; arc < num_arcs; ++arc) {
+      assignment.AddArcWithCost(left_nodes[arc], right_nodes[arc], costs[arc]);
+    }
+    const auto status = assignment.Solve();
+    if (status == operations_research::SimpleLinearSumAssignment::OPTIMAL) {
+      *out_optimal_cost = assignment.OptimalCost();
+      for (int32_t node = 0; node < assignment.NumNodes(); ++node) {
+        out_right_mates[node] = assignment.RightMate(node);
+      }
+    }
+    return static_cast<int32_t>(status);
+  } catch (const std::exception& exception) {
+    *error_message = DuplicateMessage(exception.what());
+    return -1;
+  } catch (...) {
+    *error_message = DuplicateMessage("unknown C++ exception");
+    return -1;
+  }
+}
+
+}  // extern "C"
