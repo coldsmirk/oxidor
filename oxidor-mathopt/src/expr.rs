@@ -1,12 +1,17 @@
 use std::collections::BTreeMap;
 use std::iter::Sum;
-use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
 /// A decision variable of a [`Model`](crate::Model).
 ///
-/// A cheap copyable handle; the variable's state lives in the model.
+/// A cheap copyable handle; the variable's state lives in the model. A handle
+/// is only meaningful to the model that created it — using it with another
+/// model is a programmer error and panics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Variable(pub(crate) i64);
+pub struct Variable {
+    pub(crate) model: u32,
+    pub(crate) id: i64,
+}
 
 /// A linear expression: a sum of variables with `f64` coefficients, plus a
 /// constant.
@@ -17,14 +22,22 @@ pub struct Variable(pub(crate) i64);
 /// use oxidor_mathopt::Model;
 ///
 /// let mut model = Model::new();
-/// let x = model.add_continuous_variable(0.0..=10.0);
-/// let y = model.add_continuous_variable(0.0..=10.0);
+/// let x = model.new_continuous_variable(0.0..=10.0);
+/// let y = model.new_continuous_variable(0.0..=10.0);
 ///
 /// let expr = 2.5 * x - y + 1.0;
 /// # let _ = expr;
 /// ```
+///
+/// # Panics
+///
+/// Combining variables of two different models in one expression is a
+/// programmer error and panics.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LinearExpr {
+    /// The model the variables in `terms` belong to; `None` for a
+    /// constant-only expression.
+    pub(crate) model: Option<u32>,
     pub(crate) terms: Vec<(i64, f64)>,
     pub(crate) constant: f64,
 }
@@ -36,6 +49,18 @@ impl LinearExpr {
             .into_iter()
             .map(Into::into)
             .fold(Self::default(), Add::add)
+    }
+
+    /// Absorbs another expression's model identity, panicking on a mix of
+    /// two different models.
+    fn merge_model(&mut self, other: Option<u32>) {
+        match (self.model, other) {
+            (Some(mine), Some(theirs)) if mine != theirs => {
+                panic!("cannot mix variables from two different models in one expression")
+            }
+            (None, Some(theirs)) => self.model = Some(theirs),
+            _ => {}
+        }
     }
 
     /// Collapses to `(ids, coefficients, constant)` with duplicate variables
@@ -55,7 +80,8 @@ impl LinearExpr {
 impl From<Variable> for LinearExpr {
     fn from(variable: Variable) -> Self {
         Self {
-            terms: vec![(variable.0, 1.0)],
+            model: Some(variable.model),
+            terms: vec![(variable.id, 1.0)],
             constant: 0.0,
         }
     }
@@ -64,6 +90,7 @@ impl From<Variable> for LinearExpr {
 impl From<f64> for LinearExpr {
     fn from(constant: f64) -> Self {
         Self {
+            model: None,
             terms: Vec::new(),
             constant,
         }
@@ -95,6 +122,7 @@ impl<R: Into<LinearExpr>> Sub<R> for LinearExpr {
 impl<R: Into<LinearExpr>> AddAssign<R> for LinearExpr {
     fn add_assign(&mut self, rhs: R) {
         let rhs = rhs.into();
+        self.merge_model(rhs.model);
         self.terms.extend(rhs.terms);
         self.constant += rhs.constant;
     }
@@ -103,6 +131,7 @@ impl<R: Into<LinearExpr>> AddAssign<R> for LinearExpr {
 impl<R: Into<LinearExpr>> SubAssign<R> for LinearExpr {
     fn sub_assign(&mut self, rhs: R) {
         let rhs = rhs.into();
+        self.merge_model(rhs.model);
         self.terms.extend(
             rhs.terms
                 .into_iter()
@@ -126,7 +155,7 @@ impl<T: Into<LinearExpr>> Sum<T> for LinearExpr {
 }
 
 /// Scaling by a scalar type, for expressions and variable handles alike.
-macro_rules! impl_scalar_mul {
+macro_rules! impl_scalar_mul_div {
     ($($scalar:ty),+) => {$(
         impl Mul<$scalar> for LinearExpr {
             type Output = LinearExpr;
@@ -151,9 +180,17 @@ macro_rules! impl_scalar_mul {
             type Output = LinearExpr;
             fn mul(self, expr: LinearExpr) -> LinearExpr { expr * self }
         }
+        impl Div<$scalar> for LinearExpr {
+            type Output = LinearExpr;
+            fn div(self, divisor: $scalar) -> LinearExpr { self * (1.0 / divisor as f64) }
+        }
+        impl Div<$scalar> for Variable {
+            type Output = LinearExpr;
+            fn div(self, divisor: $scalar) -> LinearExpr { LinearExpr::from(self) / divisor }
+        }
     )+};
 }
-impl_scalar_mul!(f64, i64);
+impl_scalar_mul_div!(f64, i64);
 
 impl<R: Into<LinearExpr>> Add<R> for Variable {
     type Output = LinearExpr;
@@ -204,10 +241,14 @@ impl_scalar_lhs_add_sub!(f64, i64);
 mod tests {
     use super::*;
 
+    fn variable(id: i64) -> Variable {
+        Variable { model: 0, id }
+    }
+
     #[test]
     fn merges_duplicate_terms_and_sorts_ids() {
-        let x = Variable(3);
-        let y = Variable(1);
+        let x = variable(3);
+        let y = variable(1);
         let (ids, coefficients, constant) = (2.0 * x + y + 0.5 * x - 4.0).into_parts();
         assert_eq!(ids, vec![1, 3]);
         assert_eq!(coefficients, vec![1.0, 2.5]);
@@ -216,7 +257,7 @@ mod tests {
 
     #[test]
     fn drops_exactly_cancelled_terms() {
-        let x = Variable(0);
+        let x = variable(0);
         let (ids, coefficients, _) = (x - x).into_parts();
         assert!(ids.is_empty());
         assert!(coefficients.is_empty());
@@ -224,10 +265,27 @@ mod tests {
 
     #[test]
     fn integer_scalars_participate() {
-        let x = Variable(0);
+        let x = variable(0);
         let (ids, coefficients, constant) = (2 * x + 1).into_parts();
         assert_eq!(ids, vec![0]);
         assert_eq!(coefficients, vec![2.0]);
         assert_eq!(constant, 1.0);
+    }
+
+    #[test]
+    fn division_scales_by_the_reciprocal() {
+        let x = variable(0);
+        let (ids, coefficients, constant) = ((x + 1.0) / 2.0).into_parts();
+        assert_eq!(ids, vec![0]);
+        assert_eq!(coefficients, vec![0.5]);
+        assert_eq!(constant, 0.5);
+    }
+
+    #[test]
+    #[should_panic(expected = "two different models")]
+    fn mixing_models_in_an_expression_panics() {
+        let x = Variable { model: 0, id: 0 };
+        let y = Variable { model: 1, id: 0 };
+        let _ = x + y;
     }
 }

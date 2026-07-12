@@ -15,8 +15,8 @@
 //! use oxidor_mathopt::{Model, SolverType, TerminationReason};
 //!
 //! let mut model = Model::new();
-//! let chairs = model.add_continuous_variable(0.0..=f64::INFINITY);
-//! let tables = model.add_continuous_variable(0.0..=f64::INFINITY);
+//! let chairs = model.new_continuous_variable(0.0..=f64::INFINITY);
+//! let tables = model.new_continuous_variable(0.0..=f64::INFINITY);
 //!
 //! // Wood and labor budgets.
 //! model.add_less_or_equal(5.0 * chairs + 20.0 * tables, 400.0);
@@ -24,7 +24,7 @@
 //! model.maximize(45.0 * chairs + 80.0 * tables);
 //!
 //! let result = model.solve(SolverType::Glop).expect("Glop is available");
-//! assert_eq!(result.reason(), TerminationReason::Optimal);
+//! assert_eq!(result.status(), TerminationReason::Optimal);
 //! let solution = result.primal_solution().expect("optimal has a solution");
 //! println!("chairs = {}, tables = {}", solution.value(chairs), solution.value(tables));
 //! ```

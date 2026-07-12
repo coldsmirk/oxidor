@@ -1,7 +1,9 @@
 use core::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::Arc;
 
-use oxidor_protos::math_opt::{PrimalSolutionProto, SolveResultProto, TerminationReasonProto};
+use oxidor_protos::math_opt::{
+    PrimalSolutionProto, SolutionStatusProto, SolveResultProto, TerminationReasonProto,
+};
 use oxidor_protos::prost::Message;
 
 use crate::expr::LinearExpr;
@@ -11,11 +13,15 @@ impl Model {
     /// Solves the model with the given solver.
     ///
     /// Model shortcomings (infeasible, unbounded, …) are *outcomes*, reported
-    /// through [`SolveResult::reason`]; `Err` means the solve could not run
+    /// through [`SolveResult::status`]; `Err` means the solve could not run
     /// at all — most commonly a solver not compiled into the linked OR-Tools
     /// library, or an invalid model.
+    ///
+    /// The upstream MathOpt C API takes no per-solve parameters (v9.15), so
+    /// there is no time-limit knob here yet; interrupt long solves through
+    /// [`solve_interruptible`](Self::solve_interruptible) instead.
     pub fn solve(&self, solver: SolverType) -> Result<SolveResult, SolveError> {
-        solve_serialized(&self.proto().encode_to_vec(), solver, None)
+        self.solve_maybe_interruptible(solver, None)
     }
 
     /// Like [`solve`](Model::solve); the solve can be interrupted from
@@ -25,7 +31,19 @@ impl Model {
         solver: SolverType,
         interrupter: &SolveInterrupter,
     ) -> Result<SolveResult, SolveError> {
-        solve_serialized(&self.proto().encode_to_vec(), solver, Some(interrupter))
+        self.solve_maybe_interruptible(solver, Some(interrupter))
+    }
+
+    fn solve_maybe_interruptible(
+        &self,
+        solver: SolverType,
+        interrupter: Option<&SolveInterrupter>,
+    ) -> Result<SolveResult, SolveError> {
+        let proto = solve_serialized(&self.proto().encode_to_vec(), solver, interrupter)?;
+        Ok(SolveResult {
+            model: self.id(),
+            proto,
+        })
     }
 }
 
@@ -73,8 +91,11 @@ pub enum SolverType {
 /// A failure to run the solve at all (as opposed to an unfavorable
 /// [`TerminationReason`], which is a result).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SolveError {
-    /// The `absl::StatusCode` numeric value reported by OR-Tools.
+    /// The [`absl::StatusCode`] numeric value reported by OR-Tools.
+    ///
+    /// [`absl::StatusCode`]: https://abseil.io/docs/cpp/guides/status-codes
     pub code: i32,
     /// Human-readable description from the solver layer.
     pub message: String,
@@ -161,11 +182,26 @@ impl Drop for InterrupterHandle {
     }
 }
 
+/// Copies a MathOpt-allocated buffer into owned memory and frees it.
+fn take_mathopt_buffer(pointer: *mut c_void, length: usize) -> Vec<u8> {
+    if pointer.is_null() || length == 0 {
+        return Vec::new();
+    }
+    // SAFETY: non-null with a nonzero length means the C side handed us a
+    // readable buffer of exactly `length` bytes that we own; we copy it out
+    // and release it with MathOptFree, as the API requires.
+    unsafe {
+        let bytes = core::slice::from_raw_parts(pointer.cast::<u8>(), length).to_vec();
+        oxidor_sys::MathOptFree(pointer);
+        bytes
+    }
+}
+
 fn solve_serialized(
     model_bytes: &[u8],
     solver: SolverType,
     interrupter: Option<&SolveInterrupter>,
-) -> Result<SolveResult, SolveError> {
+) -> Result<SolveResultProto, SolveError> {
     let mut result_pointer: *mut c_void = core::ptr::null_mut();
     let mut result_length: usize = 0;
     let mut status_message: *mut c_char = core::ptr::null_mut();
@@ -205,27 +241,23 @@ fn solve_serialized(
         });
     }
 
-    // SAFETY: on success the API hands us a buffer of exactly result_length
-    // bytes; copy it out and free it with MathOptFree.
-    let result_bytes =
-        unsafe { core::slice::from_raw_parts(result_pointer.cast::<u8>(), result_length) };
-    let proto = SolveResultProto::decode(result_bytes).expect(
+    // Free before decoding so a decode panic cannot leak the C buffer.
+    let result_bytes = take_mathopt_buffer(result_pointer, result_length);
+    Ok(SolveResultProto::decode(result_bytes.as_slice()).expect(
         "OR-Tools returned an undecodable SolveResultProto; version mismatch between oxidor-protos and the linked library",
-    );
-    unsafe { oxidor_sys::MathOptFree(result_pointer) };
-
-    Ok(SolveResult { proto })
+    ))
 }
 
 /// The outcome of a MathOpt solve: a termination reason and any solutions.
 #[derive(Debug, Clone)]
 pub struct SolveResult {
+    model: u32,
     proto: SolveResultProto,
 }
 
 impl SolveResult {
-    /// Why the solver stopped.
-    pub fn reason(&self) -> TerminationReason {
+    /// How the solve ended — why the solver stopped.
+    pub fn status(&self) -> TerminationReason {
         let reason = self
             .proto
             .termination
@@ -261,21 +293,32 @@ impl SolveResult {
             .unwrap_or_default()
     }
 
-    /// The best primal solution, when the solver found one
+    /// The best *feasible* primal solution, when the solver found one
     /// ([`Optimal`](TerminationReason::Optimal) or
     /// [`Feasible`](TerminationReason::Feasible), and occasionally alongside
     /// other reasons).
+    ///
+    /// Solutions the solver marked infeasible or undetermined — e.g. the
+    /// slightly-infeasible answers of an [`Imprecise`](TerminationReason::Imprecise)
+    /// termination — are not returned here; they remain accessible through
+    /// [`raw`](Self::raw).
     pub fn primal_solution(&self) -> Option<PrimalSolution<'_>> {
         // The result contract orders primal-feasible solutions first.
         self.proto
             .solutions
             .iter()
-            .find_map(|solution| solution.primal_solution.as_ref())
-            .map(|proto| PrimalSolution { proto })
+            .filter_map(|solution| solution.primal_solution.as_ref())
+            .find(|primal| {
+                primal.feasibility_status() == SolutionStatusProto::SolutionStatusFeasible
+            })
+            .map(|proto| PrimalSolution {
+                model: self.model,
+                proto,
+            })
     }
 
-    /// The raw `SolveResultProto` for statistics this wrapper does not
-    /// surface (dual solutions, rays, solve stats).
+    /// The raw `SolveResultProto` for anything this wrapper does not
+    /// surface (dual solutions, rays, solve stats, infeasible solutions).
     pub fn raw(&self) -> &SolveResultProto {
         &self.proto
     }
@@ -308,6 +351,7 @@ pub enum TerminationReason {
 /// A primal variable assignment, borrowed from a [`SolveResult`].
 #[derive(Debug, Clone, Copy)]
 pub struct PrimalSolution<'result> {
+    model: u32,
     proto: &'result PrimalSolutionProto,
 }
 
@@ -321,8 +365,17 @@ impl PrimalSolution<'_> {
     ///
     /// Variables missing from the solver's (sparse) answer evaluate to `0.0`;
     /// solvers report every model variable unless explicitly filtered.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a handle from a different model — a programmer error.
+    #[track_caller]
     pub fn value(&self, expr: impl Into<LinearExpr>) -> f64 {
         let expr = expr.into();
+        assert!(
+            expr.model.is_none_or(|model| model == self.model),
+            "the expression uses variables from a different model",
+        );
         let values = self.proto.variable_values.as_ref();
         let lookup = |id: i64| -> f64 {
             let Some(values) = values else { return 0.0 };
