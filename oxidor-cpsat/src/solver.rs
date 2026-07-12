@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use oxidor_protos::prost::Message;
-use oxidor_protos::sat::{CpSolverResponse, CpSolverStatus, SatParameters};
+use oxidor_protos::sat::{CpModelProto, CpSolverResponse, CpSolverStatus, SatParameters};
 
 use crate::expr::{BoolVar, LinearExpr};
 use crate::model::CpModelBuilder;
@@ -103,6 +103,48 @@ impl CpModelBuilder {
             proto: response,
         }
     }
+}
+
+/// Solves a raw [`CpModelProto`] — the write side of the wire-level escape
+/// hatch, for models built or modified below the [`CpModelBuilder`] API
+/// (loaded from disk, produced by another tool, or tweaked via
+/// [`into_proto`](CpModelBuilder::into_proto)).
+///
+/// Raw in, raw out: the result is the untyped [`CpSolverResponse`]; read
+/// variable values from its `solution` field by variable index. A model the
+/// solver rejects comes back with status `MODEL_INVALID`, not a crash — the
+/// typed proto argument means the bytes always parse on the C++ side.
+///
+/// ```no_run
+/// use oxidor_cpsat::{CpModelBuilder, SatParameters, solve_model_proto};
+///
+/// # let model = CpModelBuilder::new();
+/// let mut proto = model.into_proto();
+/// proto.variables[0].domain = vec![5, 5]; // pin a variable by hand
+/// let response = solve_model_proto(&proto, &SatParameters::default());
+/// println!("x = {}", response.solution[0]);
+/// ```
+///
+/// # Panics
+///
+/// Panics if the serialized model exceeds 2 GiB (a limit of the CP-SAT C
+/// API).
+pub fn solve_model_proto(model: &CpModelProto, parameters: &SatParameters) -> CpSolverResponse {
+    solve_serialized(&model.encode_to_vec(), &parameters.encode_to_vec(), None)
+}
+
+/// Like [`solve_model_proto`], but runs under a [`StopToken`] so the search
+/// can be stopped early from another thread.
+pub fn solve_model_proto_interruptible(
+    model: &CpModelProto,
+    parameters: &SatParameters,
+    token: &mut StopToken,
+) -> CpSolverResponse {
+    solve_serialized(
+        &model.encode_to_vec(),
+        &parameters.encode_to_vec(),
+        Some(token),
+    )
 }
 
 /// Drives interruptible solves
