@@ -1,10 +1,12 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use oxidor_protos::sat::{
-    AllDifferentConstraintProto, BoolArgumentProto, ConstraintProto, CpModelProto,
-    CpObjectiveProto, CumulativeConstraintProto, IntegerVariableProto, IntervalConstraintProto,
-    LinearArgumentProto, LinearConstraintProto, LinearExpressionProto, NoOverlapConstraintProto,
-    constraint_proto,
+    AllDifferentConstraintProto, AutomatonConstraintProto, BoolArgumentProto,
+    CircuitConstraintProto, ConstraintProto, CpModelProto, CpObjectiveProto,
+    CumulativeConstraintProto, ElementConstraintProto, IntegerVariableProto,
+    IntervalConstraintProto, InverseConstraintProto, LinearArgumentProto, LinearConstraintProto,
+    LinearExpressionProto, NoOverlap2DConstraintProto, NoOverlapConstraintProto,
+    ReservoirConstraintProto, RoutesConstraintProto, TableConstraintProto, constraint_proto,
 };
 
 use crate::domain::Domain;
@@ -219,6 +221,219 @@ impl CpModelBuilder {
         self.append_constraint(constraint_proto::Constraint::LinMax(argument))
     }
 
+    /// Constrains `target` to equal the product of the expressions (an empty
+    /// product forces `target == 1`).
+    ///
+    /// The solver rejects models where the product can overflow an `i64` over
+    /// the initial domains.
+    pub fn add_multiplication_equality<T: Into<LinearExpr>>(
+        &mut self,
+        target: impl Into<LinearExpr>,
+        exprs: impl IntoIterator<Item = T>,
+    ) -> Constraint<'_> {
+        let argument = self.linear_argument_proto(target, exprs, false);
+        self.append_constraint(constraint_proto::Constraint::IntProd(argument))
+    }
+
+    /// Constrains `target == numerator / denominator`, rounding toward zero
+    /// (`12 / 5 == 2`, `-10 / 3 == -3`).
+    ///
+    /// The solver rejects models where `denominator`'s domain contains 0.
+    pub fn add_division_equality(
+        &mut self,
+        target: impl Into<LinearExpr>,
+        numerator: impl Into<LinearExpr>,
+        denominator: impl Into<LinearExpr>,
+    ) -> Constraint<'_> {
+        let argument =
+            self.linear_argument_proto(target, [numerator.into(), denominator.into()], false);
+        self.append_constraint(constraint_proto::Constraint::IntDiv(argument))
+    }
+
+    /// Constrains `target == expr % modulus`; the target takes the sign of
+    /// `expr`.
+    ///
+    /// The solver rejects models where `modulus`'s domain is not strictly
+    /// positive.
+    pub fn add_modulo_equality(
+        &mut self,
+        target: impl Into<LinearExpr>,
+        expr: impl Into<LinearExpr>,
+        modulus: impl Into<LinearExpr>,
+    ) -> Constraint<'_> {
+        let argument = self.linear_argument_proto(target, [expr.into(), modulus.into()], false);
+        self.append_constraint(constraint_proto::Constraint::IntMod(argument))
+    }
+
+    /// Constrains `target` to equal the absolute value of `expr`.
+    pub fn add_abs_equality(
+        &mut self,
+        target: impl Into<LinearExpr>,
+        expr: impl Into<LinearExpr>,
+    ) -> Constraint<'_> {
+        // Encoded as target == max(expr, -expr), like the C++ CpModelBuilder.
+        let expr = self.owned_expr(expr);
+        let argument = self.linear_argument_proto(target, [expr.clone(), -expr], false);
+        self.append_constraint(constraint_proto::Constraint::LinMax(argument))
+    }
+
+    /// Constrains `target` to equal `exprs[index]`, which also restricts
+    /// `index` to `0..exprs.len()`.
+    ///
+    /// The classic lookup constraint: the expressions may be constants (a
+    /// table of values indexed by a variable) or variables themselves.
+    pub fn add_element<T: Into<LinearExpr>>(
+        &mut self,
+        index: impl Into<LinearExpr>,
+        exprs: impl IntoIterator<Item = T>,
+        target: impl Into<LinearExpr>,
+    ) -> Constraint<'_> {
+        let element = ElementConstraintProto {
+            linear_index: Some(linear_expression_proto(self.owned_expr(index))),
+            linear_target: Some(linear_expression_proto(self.owned_expr(target))),
+            exprs: exprs
+                .into_iter()
+                .map(|expr| linear_expression_proto(self.owned_expr(expr)))
+                .collect(),
+            ..Default::default()
+        };
+        self.append_constraint(constraint_proto::Constraint::Element(element))
+    }
+
+    /// Constrains the tuple of expressions to equal one of the listed tuples.
+    ///
+    /// ```
+    /// # let mut model = oxidor_cpsat::CpModelBuilder::new();
+    /// let x = model.new_int_var(0..=5);
+    /// let y = model.new_int_var(0..=5);
+    /// // (x, y) must be one of (1, 2) or (2, 3).
+    /// model.add_allowed_assignments([x, y], [[1, 2], [2, 3]]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if a tuple's length differs from the number of expressions.
+    pub fn add_allowed_assignments<T: Into<LinearExpr>>(
+        &mut self,
+        exprs: impl IntoIterator<Item = T>,
+        tuples: impl IntoIterator<Item = impl AsRef<[i64]>>,
+    ) -> Constraint<'_> {
+        let table = self.table_constraint_proto(exprs, tuples, false);
+        self.append_constraint(constraint_proto::Constraint::Table(table))
+    }
+
+    /// Constrains the tuple of expressions to differ from every listed tuple.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a tuple's length differs from the number of expressions.
+    pub fn add_forbidden_assignments<T: Into<LinearExpr>>(
+        &mut self,
+        exprs: impl IntoIterator<Item = T>,
+        tuples: impl IntoIterator<Item = impl AsRef<[i64]>>,
+    ) -> Constraint<'_> {
+        let table = self.table_constraint_proto(exprs, tuples, true);
+        self.append_constraint(constraint_proto::Constraint::Table(table))
+    }
+
+    /// Constrains the two variable arrays to be inverse permutations of each
+    /// other: `f_direct[i] == j ⇔ f_inverse[j] == i`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the arrays have different lengths.
+    pub fn add_inverse(
+        &mut self,
+        f_direct: impl IntoIterator<Item = IntVar>,
+        f_inverse: impl IntoIterator<Item = IntVar>,
+    ) -> Constraint<'_> {
+        let inverse = InverseConstraintProto {
+            f_direct: f_direct
+                .into_iter()
+                .map(|var| self.owned_var(var))
+                .collect(),
+            f_inverse: f_inverse
+                .into_iter()
+                .map(|var| self.owned_var(var))
+                .collect(),
+        };
+        assert_eq!(
+            inverse.f_direct.len(),
+            inverse.f_inverse.len(),
+            "add_inverse needs arrays of equal length",
+        );
+        self.append_constraint(constraint_proto::Constraint::Inverse(inverse))
+    }
+
+    /// Constrains the selected arcs — each `(tail, head, literal)`, present
+    /// when its literal is true — to form a single circuit visiting every
+    /// node with an incident arc exactly once.
+    ///
+    /// Self-arcs `(n, n, literal)` are allowed and mean "node n is skipped"
+    /// when the literal is true.
+    pub fn add_circuit(
+        &mut self,
+        arcs: impl IntoIterator<Item = (i32, i32, BoolVar)>,
+    ) -> Constraint<'_> {
+        let (tails, heads, literals) = self.arc_lists(arcs);
+        let circuit = CircuitConstraintProto {
+            tails,
+            heads,
+            literals,
+        };
+        self.append_constraint(constraint_proto::Constraint::Circuit(circuit))
+    }
+
+    /// Constrains the selected arcs to form a set of routes, all starting and
+    /// ending at node 0 (the depot) — the CP-SAT native vehicle-routing
+    /// constraint.
+    ///
+    /// Every node other than 0 must have exactly one incoming and one
+    /// outgoing selected arc (use a self-arc to make a node optional); node 0
+    /// has one per route.
+    pub fn add_multiple_circuit(
+        &mut self,
+        arcs: impl IntoIterator<Item = (i32, i32, BoolVar)>,
+    ) -> Constraint<'_> {
+        let (tails, heads, literals) = self.arc_lists(arcs);
+        let routes = RoutesConstraintProto {
+            tails,
+            heads,
+            literals,
+            ..Default::default()
+        };
+        self.append_constraint(constraint_proto::Constraint::Routes(routes))
+    }
+
+    /// Constrains the sequence of expressions to be accepted by the
+    /// finite-state automaton given as `(tail_state, head_state, label)`
+    /// transitions: starting from `starting_state`, step `i` follows the
+    /// transition whose label equals the value of the `i`-th expression, and
+    /// the final state must be one of `final_states`.
+    pub fn add_automaton<T: Into<LinearExpr>>(
+        &mut self,
+        exprs: impl IntoIterator<Item = T>,
+        starting_state: i64,
+        final_states: impl IntoIterator<Item = i64>,
+        transitions: impl IntoIterator<Item = (i64, i64, i64)>,
+    ) -> Constraint<'_> {
+        let mut automaton = AutomatonConstraintProto {
+            starting_state,
+            final_states: final_states.into_iter().collect(),
+            exprs: exprs
+                .into_iter()
+                .map(|expr| linear_expression_proto(self.owned_expr(expr)))
+                .collect(),
+            ..Default::default()
+        };
+        for (tail, head, label) in transitions {
+            automaton.transition_tail.push(tail);
+            automaton.transition_head.push(head);
+            automaton.transition_label.push(label);
+        }
+        self.append_constraint(constraint_proto::Constraint::Automaton(automaton))
+    }
+
     /// Constrains at least one literal to be true.
     pub fn add_bool_or(&mut self, literals: impl IntoIterator<Item = BoolVar>) -> Constraint<'_> {
         let arg = self.bool_argument_proto(literals);
@@ -247,6 +462,12 @@ impl CpModelBuilder {
     ) -> Constraint<'_> {
         let arg = self.bool_argument_proto(literals);
         self.append_constraint(constraint_proto::Constraint::ExactlyOne(arg))
+    }
+
+    /// Constrains an odd number of the literals to be true.
+    pub fn add_bool_xor(&mut self, literals: impl IntoIterator<Item = BoolVar>) -> Constraint<'_> {
+        let arg = self.bool_argument_proto(literals);
+        self.append_constraint(constraint_proto::Constraint::BoolXor(arg))
     }
 
     /// Constrains `condition => consequence`.
@@ -322,6 +543,75 @@ impl CpModelBuilder {
         self.append_constraint(constraint_proto::Constraint::Cumulative(cumulative))
     }
 
+    /// Constrains the boxes — each spanning `x_interval × y_interval` — to be
+    /// pairwise non-overlapping in the plane (rectangle packing).
+    ///
+    /// A box is optional when one of its intervals is optional.
+    pub fn add_no_overlap_2d(
+        &mut self,
+        boxes: impl IntoIterator<Item = (IntervalVar, IntervalVar)>,
+    ) -> Constraint<'_> {
+        let mut no_overlap = NoOverlap2DConstraintProto::default();
+        for (x_interval, y_interval) in boxes {
+            no_overlap.x_intervals.push(self.owned_interval(x_interval));
+            no_overlap.y_intervals.push(self.owned_interval(y_interval));
+        }
+        self.append_constraint(constraint_proto::Constraint::NoOverlap2d(no_overlap))
+    }
+
+    /// Constrains a running level to stay within `min_level..=max_level`
+    /// (with `min_level <= 0 <= max_level`; the level starts at 0): each
+    /// `(time, level_change)` event adds its change to the level at its time.
+    ///
+    /// Use a fixed event to model an initial stock.
+    pub fn add_reservoir<T: Into<LinearExpr>, L: Into<LinearExpr>>(
+        &mut self,
+        min_level: i64,
+        max_level: i64,
+        events: impl IntoIterator<Item = (T, L)>,
+    ) -> Constraint<'_> {
+        let mut reservoir = ReservoirConstraintProto {
+            min_level,
+            max_level,
+            ..Default::default()
+        };
+        for (time, level_change) in events {
+            reservoir
+                .time_exprs
+                .push(linear_expression_proto(self.owned_expr(time)));
+            reservoir
+                .level_changes
+                .push(linear_expression_proto(self.owned_expr(level_change)));
+        }
+        self.append_constraint(constraint_proto::Constraint::Reservoir(reservoir))
+    }
+
+    /// Like [`add_reservoir`](Self::add_reservoir), but each
+    /// `(time, level_change, active)` event only affects the level when its
+    /// `active` literal is true.
+    pub fn add_reservoir_with_optional_events<T: Into<LinearExpr>, L: Into<LinearExpr>>(
+        &mut self,
+        min_level: i64,
+        max_level: i64,
+        events: impl IntoIterator<Item = (T, L, BoolVar)>,
+    ) -> Constraint<'_> {
+        let mut reservoir = ReservoirConstraintProto {
+            min_level,
+            max_level,
+            ..Default::default()
+        };
+        for (time, level_change, active) in events {
+            reservoir
+                .time_exprs
+                .push(linear_expression_proto(self.owned_expr(time)));
+            reservoir
+                .level_changes
+                .push(linear_expression_proto(self.owned_expr(level_change)));
+            reservoir.active_literals.push(self.owned_literal(active));
+        }
+        self.append_constraint(constraint_proto::Constraint::Reservoir(reservoir))
+    }
+
     /// Sets the objective to minimizing `expr`, replacing any previous
     /// objective.
     pub fn minimize(&mut self, expr: impl Into<LinearExpr>) {
@@ -349,6 +639,56 @@ impl CpModelBuilder {
         });
     }
 
+    /// Hints the search that `var` is likely `value` in a good solution.
+    /// Hints guide the search; they are not constraints.
+    pub fn add_hint(&mut self, var: IntVar, value: i64) {
+        let index = self.owned_var(var);
+        let hint = self
+            .proto
+            .solution_hint
+            .get_or_insert_with(Default::default);
+        hint.vars.push(index);
+        hint.values.push(value);
+    }
+
+    /// Hints the search that `literal` is likely `value` in a good solution.
+    pub fn add_bool_hint(&mut self, literal: BoolVar, value: bool) {
+        let index = self.owned_literal(literal);
+        // A hint targets the underlying variable: unwrap a negated literal.
+        let (var, value) = if index >= 0 {
+            (index, i64::from(value))
+        } else {
+            (-index - 1, i64::from(!value))
+        };
+        let hint = self
+            .proto
+            .solution_hint
+            .get_or_insert_with(Default::default);
+        hint.vars.push(var);
+        hint.values.push(value);
+    }
+
+    /// Removes every hint added so far.
+    pub fn clear_hints(&mut self) {
+        self.proto.solution_hint = None;
+    }
+
+    /// Adds literals the solve assumes true. When that makes the model
+    /// infeasible, the raw response's
+    /// `sufficient_assumptions_for_infeasibility` field names a subset of
+    /// them explaining the conflict.
+    pub fn add_assumptions(&mut self, literals: impl IntoIterator<Item = BoolVar>) {
+        for literal in literals {
+            let index = self.owned_literal(literal);
+            self.proto.assumptions.push(index);
+        }
+    }
+
+    /// Removes every assumption added so far.
+    pub fn clear_assumptions(&mut self) {
+        self.proto.assumptions.clear();
+    }
+
     /// The model as its wire representation.
     pub fn proto(&self) -> &CpModelProto {
         &self.proto
@@ -373,6 +713,16 @@ impl CpModelBuilder {
             "the expression uses variables from a different CpModelBuilder",
         );
         expr
+    }
+
+    /// Checks a variable's origin, panicking on a handle from another model.
+    #[track_caller]
+    fn owned_var(&self, var: IntVar) -> i32 {
+        assert!(
+            var.model == self.id,
+            "the variable belongs to a different CpModelBuilder",
+        );
+        var.index
     }
 
     /// Checks a literal's origin, panicking on a handle from another model.
@@ -423,6 +773,52 @@ impl CpModelBuilder {
                 .map(|expr| linear_expression_proto(self.owned_expr(expr) * sign))
                 .collect(),
         }
+    }
+
+    #[track_caller]
+    fn table_constraint_proto<T: Into<LinearExpr>>(
+        &self,
+        exprs: impl IntoIterator<Item = T>,
+        tuples: impl IntoIterator<Item = impl AsRef<[i64]>>,
+        negated: bool,
+    ) -> TableConstraintProto {
+        let exprs: Vec<LinearExpressionProto> = exprs
+            .into_iter()
+            .map(|expr| linear_expression_proto(self.owned_expr(expr)))
+            .collect();
+        let mut values = Vec::new();
+        for tuple in tuples {
+            let tuple = tuple.as_ref();
+            assert_eq!(
+                tuple.len(),
+                exprs.len(),
+                "every tuple needs one value per expression",
+            );
+            values.extend_from_slice(tuple);
+        }
+        TableConstraintProto {
+            exprs,
+            values,
+            negated,
+            ..Default::default()
+        }
+    }
+
+    /// Splits `(tail, head, literal)` arcs into the proto's parallel lists.
+    #[track_caller]
+    fn arc_lists(
+        &self,
+        arcs: impl IntoIterator<Item = (i32, i32, BoolVar)>,
+    ) -> (Vec<i32>, Vec<i32>, Vec<i32>) {
+        let mut tails = Vec::new();
+        let mut heads = Vec::new();
+        let mut literals = Vec::new();
+        for (tail, head, literal) in arcs {
+            tails.push(tail);
+            heads.push(head);
+            literals.push(self.owned_literal(literal));
+        }
+        (tails, heads, literals)
     }
 
     fn append_variable(&mut self, domain: Vec<i64>, name: String) -> i32 {
@@ -721,5 +1117,257 @@ mod tests {
         let mut branch = original.clone();
         branch.add_less_or_equal(x, 3);
         original.add_greater_or_equal(x, 7);
+    }
+
+    #[test]
+    fn element_encodes_index_target_and_exprs() {
+        let mut model = CpModelBuilder::new();
+        let index = model.new_int_var(0..=2);
+        let target = model.new_int_var(0..=10);
+        model.add_element(index, [3, 7, 9], target);
+
+        let Some(constraint_proto::Constraint::Element(element)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected an element constraint");
+        };
+        assert_eq!(element.linear_index.as_ref().expect("index").vars, vec![0]);
+        assert_eq!(
+            element.linear_target.as_ref().expect("target").vars,
+            vec![1]
+        );
+        let values: Vec<i64> = element.exprs.iter().map(|expr| expr.offset).collect();
+        assert_eq!(values, vec![3, 7, 9]);
+    }
+
+    #[test]
+    fn allowed_assignments_flatten_tuples() {
+        let mut model = CpModelBuilder::new();
+        let x = model.new_int_var(0..=5);
+        let y = model.new_int_var(0..=5);
+        model.add_allowed_assignments([x, y], [[1, 2], [2, 3]]);
+
+        let Some(constraint_proto::Constraint::Table(table)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected a table constraint");
+        };
+        assert_eq!(table.exprs.len(), 2);
+        assert_eq!(table.values, vec![1, 2, 2, 3]);
+        assert!(!table.negated);
+    }
+
+    #[test]
+    fn forbidden_assignments_set_the_negated_flag() {
+        let mut model = CpModelBuilder::new();
+        let x = model.new_int_var(0..=5);
+        model.add_forbidden_assignments([x], [[4]]);
+
+        let Some(constraint_proto::Constraint::Table(table)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected a table constraint");
+        };
+        assert!(table.negated);
+    }
+
+    #[test]
+    #[should_panic(expected = "one value per expression")]
+    fn table_rejects_a_ragged_tuple() {
+        let mut model = CpModelBuilder::new();
+        let x = model.new_int_var(0..=5);
+        let y = model.new_int_var(0..=5);
+        model.add_allowed_assignments([x, y], [vec![1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn inverse_encodes_both_directions() {
+        let mut model = CpModelBuilder::new();
+        let f: Vec<_> = (0..3).map(|_| model.new_int_var(0..=2)).collect();
+        let g: Vec<_> = (0..3).map(|_| model.new_int_var(0..=2)).collect();
+        model.add_inverse(f, g);
+
+        let Some(constraint_proto::Constraint::Inverse(inverse)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected an inverse constraint");
+        };
+        assert_eq!(inverse.f_direct, vec![0, 1, 2]);
+        assert_eq!(inverse.f_inverse, vec![3, 4, 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "arrays of equal length")]
+    fn inverse_rejects_mismatched_lengths() {
+        let mut model = CpModelBuilder::new();
+        let f = model.new_int_var(0..=1);
+        model.add_inverse([f], []);
+    }
+
+    #[test]
+    fn circuit_encodes_arcs_with_literals() {
+        let mut model = CpModelBuilder::new();
+        let a = model.new_bool_var();
+        let b = model.new_bool_var();
+        model.add_circuit([(0, 1, a), (1, 0, b.not())]);
+
+        let Some(constraint_proto::Constraint::Circuit(circuit)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected a circuit constraint");
+        };
+        assert_eq!(circuit.tails, vec![0, 1]);
+        assert_eq!(circuit.heads, vec![1, 0]);
+        assert_eq!(circuit.literals, vec![0, -2]);
+    }
+
+    #[test]
+    fn multiple_circuit_encodes_into_routes() {
+        let mut model = CpModelBuilder::new();
+        let a = model.new_bool_var();
+        model.add_multiple_circuit([(0, 1, a)]);
+
+        let Some(constraint_proto::Constraint::Routes(routes)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected a routes constraint");
+        };
+        assert_eq!(routes.tails, vec![0]);
+        assert_eq!(routes.heads, vec![1]);
+        assert_eq!(routes.literals, vec![0]);
+    }
+
+    #[test]
+    fn automaton_encodes_transitions_in_parallel_lists() {
+        let mut model = CpModelBuilder::new();
+        let steps: Vec<_> = (0..2).map(|_| model.new_int_var(0..=1)).collect();
+        model.add_automaton(steps, 0, [2], [(0, 1, 1), (1, 2, 0)]);
+
+        let Some(constraint_proto::Constraint::Automaton(automaton)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected an automaton constraint");
+        };
+        assert_eq!(automaton.starting_state, 0);
+        assert_eq!(automaton.final_states, vec![2]);
+        assert_eq!(automaton.transition_tail, vec![0, 1]);
+        assert_eq!(automaton.transition_head, vec![1, 2]);
+        assert_eq!(automaton.transition_label, vec![1, 0]);
+        assert_eq!(automaton.exprs.len(), 2);
+    }
+
+    #[test]
+    fn reservoir_encodes_events() {
+        let mut model = CpModelBuilder::new();
+        let time = model.new_int_var(0..=10);
+        model.add_reservoir(0, 5, [(LinearExpr::from(time), 3), (time + 2, -3)]);
+
+        let Some(constraint_proto::Constraint::Reservoir(reservoir)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected a reservoir constraint");
+        };
+        assert_eq!(reservoir.min_level, 0);
+        assert_eq!(reservoir.max_level, 5);
+        assert_eq!(reservoir.time_exprs.len(), 2);
+        assert_eq!(reservoir.level_changes[0].offset, 3);
+        assert_eq!(reservoir.level_changes[1].offset, -3);
+        assert!(reservoir.active_literals.is_empty());
+    }
+
+    #[test]
+    fn optional_reservoir_events_carry_literals() {
+        let mut model = CpModelBuilder::new();
+        let time = model.new_int_var(0..=10);
+        let active = model.new_bool_var();
+        model.add_reservoir_with_optional_events(0, 5, [(time, 2, active)]);
+
+        let Some(constraint_proto::Constraint::Reservoir(reservoir)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected a reservoir constraint");
+        };
+        assert_eq!(reservoir.active_literals, vec![1]);
+    }
+
+    #[test]
+    fn no_overlap_2d_pairs_intervals() {
+        let mut model = CpModelBuilder::new();
+        let x = model.new_int_var(0..=5);
+        let y = model.new_int_var(0..=5);
+        let width = model.new_interval_var(x, 2, x + 2);
+        let height = model.new_interval_var(y, 2, y + 2);
+        model.add_no_overlap_2d([(width, height)]);
+
+        let Some(constraint_proto::Constraint::NoOverlap2d(no_overlap)) =
+            &model.proto().constraints[2].constraint
+        else {
+            panic!("expected a no_overlap_2d constraint");
+        };
+        assert_eq!(no_overlap.x_intervals, vec![0]);
+        assert_eq!(no_overlap.y_intervals, vec![1]);
+    }
+
+    #[test]
+    fn division_equality_orders_numerator_then_denominator() {
+        let mut model = CpModelBuilder::new();
+        let target = model.new_int_var(0..=10);
+        let numerator = model.new_int_var(0..=10);
+        let denominator = model.new_int_var(1..=10);
+        model.add_division_equality(target, numerator, denominator);
+
+        let Some(constraint_proto::Constraint::IntDiv(argument)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected an int_div constraint");
+        };
+        assert_eq!(argument.target.as_ref().expect("target").vars, vec![0]);
+        assert_eq!(argument.exprs[0].vars, vec![1]);
+        assert_eq!(argument.exprs[1].vars, vec![2]);
+    }
+
+    #[test]
+    fn abs_equality_encodes_max_of_expr_and_negation() {
+        let mut model = CpModelBuilder::new();
+        let target = model.new_int_var(0..=10);
+        let x = model.new_int_var(-10..=10);
+        model.add_abs_equality(target, x);
+
+        let Some(constraint_proto::Constraint::LinMax(argument)) =
+            &model.proto().constraints[0].constraint
+        else {
+            panic!("expected a lin_max constraint");
+        };
+        assert_eq!(argument.exprs[0].coeffs, vec![1]);
+        assert_eq!(argument.exprs[1].coeffs, vec![-1]);
+    }
+
+    #[test]
+    fn hints_accumulate_and_unwrap_negated_literals() {
+        let mut model = CpModelBuilder::new();
+        let x = model.new_int_var(0..=10);
+        let flag = model.new_bool_var();
+        model.add_hint(x, 7);
+        model.add_bool_hint(flag.not(), true);
+
+        let hint = model.proto().solution_hint.as_ref().expect("hints set");
+        assert_eq!(hint.vars, vec![0, 1]);
+        // Hinting "not(flag) is true" means the underlying flag is 0.
+        assert_eq!(hint.values, vec![7, 0]);
+
+        model.clear_hints();
+        assert!(model.proto().solution_hint.is_none());
+    }
+
+    #[test]
+    fn assumptions_store_literal_indices() {
+        let mut model = CpModelBuilder::new();
+        let a = model.new_bool_var();
+        let b = model.new_bool_var();
+        model.add_assumptions([a, b.not()]);
+
+        assert_eq!(model.proto().assumptions, vec![0, -2]);
+        model.clear_assumptions();
+        assert!(model.proto().assumptions.is_empty());
     }
 }

@@ -177,6 +177,226 @@ fn min_equality_binds_the_smallest_expression() {
 }
 
 #[test]
+fn element_picks_the_indexed_value() {
+    let mut model = CpModelBuilder::new();
+    let index = model.new_int_var(0..=2);
+    let target = model.new_int_var(0..=100);
+    model.add_element(index, [3, 7, 9], target);
+    model.add_equality(target, 7);
+
+    let response = model.solve();
+
+    let solution = response.solution().expect("feasible");
+    assert_eq!(solution.value(index), 1);
+}
+
+#[test]
+fn allowed_assignments_restrict_the_tuple() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(0..=5);
+    let y = model.new_int_var(0..=5);
+    model.add_allowed_assignments([x, y], [[1, 2], [2, 3]]);
+    model.maximize(x + y);
+
+    let response = model.solve();
+
+    assert_eq!(response.status(), SolveStatus::Optimal);
+    let solution = response.solution().expect("optimal");
+    assert_eq!((solution.value(x), solution.value(y)), (2, 3));
+}
+
+#[test]
+fn forbidden_assignments_exclude_the_tuple() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(0..=1);
+    let y = model.new_int_var(0..=1);
+    model.add_forbidden_assignments([x, y], [[1, 1]]);
+    model.maximize(x + y);
+
+    let response = model.solve();
+
+    // Without (1, 1), the best total is 1.
+    assert_eq!(response.objective_value(), 1.0);
+}
+
+#[test]
+fn circuit_finds_the_cheapest_tour() {
+    // Three nodes, all six arcs: the cheap direction 0→1→2→0 costs 1+2+3=6,
+    // the reverse 15.
+    let mut model = CpModelBuilder::new();
+    let arcs = [
+        (0, 1, 1),
+        (1, 2, 2),
+        (2, 0, 3),
+        (1, 0, 4),
+        (2, 1, 5),
+        (0, 2, 6),
+    ];
+    let literals: Vec<_> = arcs.map(|_| model.new_bool_var()).into_iter().collect();
+    model.add_circuit(
+        arcs.iter()
+            .zip(&literals)
+            .map(|(&(tail, head, _), &literal)| (tail, head, literal)),
+    );
+    model.minimize(
+        arcs.iter()
+            .zip(&literals)
+            .map(|(&(_, _, cost), &literal)| literal * cost)
+            .sum::<oxidor_cpsat::LinearExpr>(),
+    );
+
+    let response = model.solve();
+
+    assert_eq!(response.status(), SolveStatus::Optimal);
+    // Evaluate the cost expression exactly: the reported objective_value is a
+    // double and may carry floating-point noise.
+    let tour_cost = response.solution().expect("optimal").value(
+        arcs.iter()
+            .zip(&literals)
+            .map(|(&(_, _, cost), &literal)| literal * cost)
+            .sum::<oxidor_cpsat::LinearExpr>(),
+    );
+    assert_eq!(tour_cost, 6);
+}
+
+#[test]
+fn multiplication_equality_binds_the_product() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(1..=12);
+    let y = model.new_int_var(1..=12);
+    let product = model.new_int_var(0..=144);
+    model.add_multiplication_equality(product, [x, y]);
+    model.add_equality(product, 12);
+    model.minimize(x + y);
+
+    let response = model.solve();
+
+    // 12 = 3 × 4 minimizes the factor sum.
+    assert_eq!(response.objective_value(), 7.0);
+}
+
+#[test]
+fn division_and_modulo_round_toward_zero() {
+    let mut model = CpModelBuilder::new();
+    let numerator = model.new_constant(7);
+    let divisor = model.new_constant(3);
+    let quotient = model.new_int_var(0..=10);
+    let remainder = model.new_int_var(0..=10);
+    model.add_division_equality(quotient, numerator, divisor);
+    model.add_modulo_equality(remainder, numerator, divisor);
+
+    let response = model.solve();
+
+    let solution = response.solution().expect("feasible");
+    assert_eq!(solution.value(quotient), 2);
+    assert_eq!(solution.value(remainder), 1);
+}
+
+#[test]
+fn abs_equality_reflects_a_negative_value() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_constant(-5);
+    let magnitude = model.new_int_var(0..=10);
+    model.add_abs_equality(magnitude, x);
+
+    let response = model.solve();
+
+    assert_eq!(response.solution().expect("feasible").value(magnitude), 5);
+}
+
+#[test]
+fn bool_xor_forces_odd_parity() {
+    let mut model = CpModelBuilder::new();
+    let a = model.new_bool_var();
+    let b = model.new_bool_var();
+    let c = model.new_bool_var();
+    model.add_bool_xor([a, b, c]);
+    model.add_bool_and([a, b]);
+
+    let response = model.solve();
+
+    // With a and b true, odd parity forces c true.
+    assert!(response.solution().expect("feasible").bool_value(c));
+}
+
+#[test]
+fn inverse_derives_the_inverse_permutation() {
+    let mut model = CpModelBuilder::new();
+    let f: Vec<_> = (0..3).map(|_| model.new_int_var(0..=2)).collect();
+    let g: Vec<_> = (0..3).map(|_| model.new_int_var(0..=2)).collect();
+    model.add_inverse(f.clone(), g.clone());
+    model.add_equality(f[0], 1);
+    model.add_equality(f[1], 2);
+
+    let response = model.solve();
+
+    let solution = response.solution().expect("feasible");
+    // f = (1, 2, 0) forces its inverse g = (2, 0, 1).
+    assert_eq!(solution.value(f[2]), 0);
+    assert_eq!([g[0], g[1], g[2]].map(|var| solution.value(var)), [2, 0, 1]);
+}
+
+#[test]
+fn automaton_accepts_only_the_encoded_sequence() {
+    // A straight-line automaton accepting exactly the label sequence 1, 0, 1.
+    let mut model = CpModelBuilder::new();
+    let steps: Vec<_> = (0..3).map(|_| model.new_int_var(0..=1)).collect();
+    model.add_automaton(steps.clone(), 0, [3], [(0, 1, 1), (1, 2, 0), (2, 3, 1)]);
+
+    let response = model.solve();
+
+    let solution = response.solution().expect("feasible");
+    assert_eq!(
+        steps
+            .iter()
+            .map(|&step| solution.value(step))
+            .collect::<Vec<_>>(),
+        vec![1, 0, 1]
+    );
+}
+
+#[test]
+fn reservoir_orders_the_refill_before_the_drain() {
+    let mut model = CpModelBuilder::new();
+    let refill = model.new_int_var(0..=10);
+    let drain = model.new_int_var(0..=10);
+    model.add_not_equal(refill, drain);
+    model.add_reservoir(
+        0,
+        3,
+        [
+            (oxidor_cpsat::LinearExpr::from(refill), 3),
+            (oxidor_cpsat::LinearExpr::from(drain), -2),
+        ],
+    );
+
+    let response = model.solve();
+
+    let solution = response.solution().expect("feasible");
+    // Draining first would push the level to -2, below the floor.
+    assert!(solution.value(refill) < solution.value(drain));
+}
+
+#[test]
+fn no_overlap_2d_rejects_two_large_boxes_in_a_small_area() {
+    // Two 2×2 boxes cannot fit anywhere in a 3×3 area.
+    let mut model = CpModelBuilder::new();
+    let mut boxes = Vec::new();
+    for _ in 0..2 {
+        let x = model.new_int_var(0..=1);
+        let y = model.new_int_var(0..=1);
+        let horizontal = model.new_interval_var(x, 2, x + 2);
+        let vertical = model.new_interval_var(y, 2, y + 2);
+        boxes.push((horizontal, vertical));
+    }
+    model.add_no_overlap_2d(boxes);
+
+    let response = model.solve();
+
+    assert_eq!(response.status(), SolveStatus::Infeasible);
+}
+
+#[test]
 fn respects_solver_parameters() {
     let mut model = CpModelBuilder::new();
     let x = model.new_int_var(0..=10);
@@ -311,6 +531,62 @@ fn picks_shifts_like_the_crate_example() {
     let solution = response.solution().expect("feasible");
     assert_eq!(response.objective_value(), 14.0);
     assert!(solution.bool_value(shifts[2]));
+}
+
+#[test]
+fn solve_model_proto_runs_a_hand_modified_model() {
+    // The wire-level escape hatch: build with the builder, drop to the proto,
+    // tighten a domain by hand, solve raw, read the raw solution.
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(0..=10);
+    model.maximize(x);
+
+    let mut proto = model.into_proto();
+    proto.variables[0].domain = vec![0, 7];
+    let response = oxidor_cpsat::solve_model_proto(&proto, &SatParameters::default());
+
+    assert_eq!(
+        response.status(),
+        oxidor_cpsat::protos::sat::CpSolverStatus::Optimal
+    );
+    assert_eq!(response.solution, vec![7]);
+}
+
+#[test]
+fn solve_model_proto_reports_an_invalid_model_as_a_status() {
+    // A variable with an empty domain fails CP-SAT's validation; the raw
+    // entry must surface that as MODEL_INVALID, never as a crash.
+    let mut model = CpModelBuilder::new();
+    let _ = model.new_int_var(0..=1);
+    let mut proto = model.into_proto();
+    proto.variables[0].domain = vec![];
+
+    let response = oxidor_cpsat::solve_model_proto(&proto, &SatParameters::default());
+
+    assert_eq!(
+        response.status(),
+        oxidor_cpsat::protos::sat::CpSolverStatus::ModelInvalid
+    );
+}
+
+#[test]
+fn solve_model_proto_interruptible_honors_a_pre_stopped_token() {
+    let mut model = CpModelBuilder::new();
+    let x = model.new_int_var(0..=10);
+    model.maximize(x);
+
+    let mut token = oxidor_cpsat::StopToken::new();
+    token.stop();
+    let response = oxidor_cpsat::solve_model_proto_interruptible(
+        &model.into_proto(),
+        &SatParameters::default(),
+        &mut token,
+    );
+
+    assert_eq!(
+        response.status(),
+        oxidor_cpsat::protos::sat::CpSolverStatus::Unknown
+    );
 }
 
 #[test]
