@@ -57,24 +57,46 @@ pub fn solve_knapsack_multidimensional(
     capacities: &[i64],
 ) -> Result<KnapsackSolution, AlgorithmError> {
     let num_items = values.len();
+    if i32::try_from(num_items).is_err() {
+        return Err(AlgorithmError::InvalidInput(format!(
+            "{num_items} items exceed the i32 range",
+        )));
+    }
     if weights_per_dimension.len() != capacities.len() {
-        return Err(AlgorithmError::new(format!(
+        return Err(AlgorithmError::InvalidInput(format!(
             "{} weight dimensions but {} capacities",
             weights_per_dimension.len(),
             capacities.len(),
         )));
     }
     if weights_per_dimension.is_empty() {
-        return Err(AlgorithmError::new(
-            "at least one weight dimension is required",
+        return Err(AlgorithmError::InvalidInput(
+            "at least one weight dimension is required".into(),
         ));
+    }
+    // Upstream assumes non-negative profits, weights, and capacities; enforce
+    // that here, where it can be an ordinary error.
+    if let Some(value) = values.iter().find(|&&value| value < 0) {
+        return Err(AlgorithmError::InvalidInput(format!(
+            "negative item value {value}",
+        )));
+    }
+    if let Some(capacity) = capacities.iter().find(|&&capacity| capacity < 0) {
+        return Err(AlgorithmError::InvalidInput(format!(
+            "negative capacity {capacity}",
+        )));
     }
     let mut weights = Vec::with_capacity(weights_per_dimension.len() * num_items);
     for (dimension, row) in weights_per_dimension.iter().enumerate() {
         if row.len() != num_items {
-            return Err(AlgorithmError::new(format!(
+            return Err(AlgorithmError::InvalidInput(format!(
                 "weight dimension {dimension} has {} entries for {num_items} items",
                 row.len(),
+            )));
+        }
+        if let Some(weight) = row.iter().find(|&&weight| weight < 0) {
+            return Err(AlgorithmError::InvalidInput(format!(
+                "negative weight {weight} in dimension {dimension}",
             )));
         }
         weights.extend_from_slice(row);
@@ -99,7 +121,7 @@ pub fn solve_knapsack_multidimensional(
     };
     if code != 0 {
         // SAFETY: nonzero return means the shim set the message (or null).
-        return Err(AlgorithmError::new(unsafe {
+        return Err(AlgorithmError::Native(unsafe {
             take_error_message(error_message)
         }));
     }

@@ -1,28 +1,30 @@
 use core::ffi::{CStr, c_char};
 
-/// A failure inside the native layer (invalid input detected by OR-Tools, or
-/// a caught C++ exception).
+/// A failure to run an algorithm.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AlgorithmError {
-    /// Human-readable description.
-    pub message: String,
+#[non_exhaustive]
+pub enum AlgorithmError {
+    /// The input violates the algorithm's contract (mismatched lengths,
+    /// negative capacities, out-of-range node indices, …); detected before
+    /// anything crosses into OR-Tools.
+    InvalidInput(String),
+    /// The native layer reported an error (invalid input detected by
+    /// OR-Tools, or a caught C++ exception).
+    Native(String),
 }
 
 impl std::fmt::Display for AlgorithmError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "OR-Tools algorithm failed: {}", self.message)
+        match self {
+            Self::InvalidInput(message) => write!(formatter, "invalid input: {message}"),
+            Self::Native(message) => {
+                write!(formatter, "OR-Tools algorithm failed: {message}")
+            }
+        }
     }
 }
 
 impl std::error::Error for AlgorithmError {}
-
-impl AlgorithmError {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
 
 /// Copies and frees a malloc'd C error message from the shim.
 ///

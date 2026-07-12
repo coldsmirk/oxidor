@@ -5,7 +5,41 @@ use crate::error::{AlgorithmError, take_error_message};
 /// An arc handle returned by [`MaxFlow::add_arc`] /
 /// [`MinCostFlow::add_arc`], used to read the arc's flow from a solution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Arc(pub(crate) usize);
+pub struct ArcId(pub(crate) usize);
+
+/// Checks the upstream flow contracts (`max_flow.h` / `min_cost_flow.h`):
+/// non-negative node indices that fit an `i32`, non-negative capacities, and
+/// an arc count within `i32`.
+fn validate_arcs(
+    tails: &[u32],
+    heads: &[u32],
+    capacities: &[i64],
+) -> Result<(Vec<i32>, Vec<i32>), AlgorithmError> {
+    if i32::try_from(tails.len()).is_err() {
+        return Err(AlgorithmError::InvalidInput(format!(
+            "{} arcs exceed the i32 range",
+            tails.len(),
+        )));
+    }
+    let node = |value: u32| -> Result<i32, AlgorithmError> {
+        i32::try_from(value)
+            .map_err(|_| AlgorithmError::InvalidInput(format!("node index {value} exceeds i32")))
+    };
+    let tails = tails
+        .iter()
+        .map(|&tail| node(tail))
+        .collect::<Result<_, _>>()?;
+    let heads = heads
+        .iter()
+        .map(|&head| node(head))
+        .collect::<Result<_, _>>()?;
+    if let Some(capacity) = capacities.iter().find(|&&capacity| capacity < 0) {
+        return Err(AlgorithmError::InvalidInput(format!(
+            "negative arc capacity {capacity}",
+        )));
+    }
+    Ok((tails, heads))
+}
 
 /// A maximum-flow problem on a directed graph with arc capacities.
 ///
@@ -26,8 +60,8 @@ pub struct Arc(pub(crate) usize);
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct MaxFlow {
-    tails: Vec<i32>,
-    heads: Vec<i32>,
+    tails: Vec<u32>,
+    heads: Vec<u32>,
     capacities: Vec<i64>,
 }
 
@@ -37,18 +71,25 @@ impl MaxFlow {
         Self::default()
     }
 
-    /// Adds a directed arc with the given capacity; nodes are arbitrary
-    /// non-negative indices.
-    pub fn add_arc(&mut self, tail: u32, head: u32, capacity: i64) -> Arc {
-        self.tails.push(tail as i32);
-        self.heads.push(head as i32);
+    /// Adds a directed arc with the given capacity. Node indices must fit an
+    /// `i32` and the capacity must be non-negative — both checked by
+    /// [`solve`](Self::solve).
+    pub fn add_arc(&mut self, tail: u32, head: u32, capacity: i64) -> ArcId {
+        self.tails.push(tail);
+        self.heads.push(head);
         self.capacities.push(capacity);
-        Arc(self.tails.len() - 1)
+        ArcId(self.tails.len() - 1)
     }
 
     /// Computes the maximum flow from `source` to `sink`.
     pub fn solve(&self, source: u32, sink: u32) -> Result<MaxFlowSolution, AlgorithmError> {
-        let num_arcs = self.tails.len();
+        let (tails, heads) = validate_arcs(&self.tails, &self.heads, &self.capacities)?;
+        if i32::try_from(source).is_err() || i32::try_from(sink).is_err() {
+            return Err(AlgorithmError::InvalidInput(
+                "source or sink index exceeds i32".into(),
+            ));
+        }
+        let num_arcs = tails.len();
         let mut flows = vec![0i64; num_arcs];
         let mut maximum_flow: i64 = 0;
         let mut error_message: *mut c_char = core::ptr::null_mut();
@@ -56,8 +97,8 @@ impl MaxFlow {
         // writable for the stated sizes.
         let status = unsafe {
             oxidor_sys::OxidorMaxFlowSolve(
-                self.tails.as_ptr(),
-                self.heads.as_ptr(),
+                tails.as_ptr(),
+                heads.as_ptr(),
                 self.capacities.as_ptr(),
                 num_arcs as i32,
                 source as i32,
@@ -75,11 +116,13 @@ impl MaxFlow {
                 flows,
             }),
             // SAFETY: -1 means the shim caught an exception and set the message.
-            -1 => Err(AlgorithmError::new(unsafe {
+            -1 => Err(AlgorithmError::Native(unsafe {
                 take_error_message(error_message)
             })),
-            1 => Err(AlgorithmError::new("flow exceeds the int64 range")),
-            _ => Err(AlgorithmError::new(format!(
+            1 => Err(AlgorithmError::Native(
+                "flow exceeds the int64 range".into(),
+            )),
+            _ => Err(AlgorithmError::Native(format!(
                 "bad input or result (SimpleMaxFlow status {status})",
             ))),
         }
@@ -100,7 +143,7 @@ impl MaxFlowSolution {
     }
 
     /// The flow assigned to an arc.
-    pub fn flow(&self, arc: Arc) -> i64 {
+    pub fn flow(&self, arc: ArcId) -> i64 {
         self.flows[arc.0]
     }
 }
@@ -116,16 +159,16 @@ impl MaxFlowSolution {
 /// graph.set_node_supply(0, 5);
 /// graph.set_node_supply(1, -5);
 ///
-/// let solution = graph.solve()?;
-/// assert!(solution.is_optimal());
+/// let response = graph.solve()?;
+/// let solution = response.solution().expect("feasible and balanced");
 /// assert_eq!(solution.total_cost(), 15);
 /// assert_eq!(solution.flow(arc), 5);
 /// # Ok::<(), oxidor_algorithms::AlgorithmError>(())
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct MinCostFlow {
-    tails: Vec<i32>,
-    heads: Vec<i32>,
+    tails: Vec<u32>,
+    heads: Vec<u32>,
     capacities: Vec<i64>,
     unit_costs: Vec<i64>,
     supplies: Vec<i64>,
@@ -137,17 +180,20 @@ impl MinCostFlow {
         Self::default()
     }
 
-    /// Adds a directed arc with a capacity and a per-unit cost.
-    pub fn add_arc(&mut self, tail: u32, head: u32, capacity: i64, unit_cost: i64) -> Arc {
-        self.tails.push(tail as i32);
-        self.heads.push(head as i32);
+    /// Adds a directed arc with a capacity and a per-unit cost. Node indices
+    /// must fit an `i32` and the capacity must be non-negative — both checked
+    /// by [`solve`](Self::solve); the unit cost may be negative (upstream
+    /// allows it).
+    pub fn add_arc(&mut self, tail: u32, head: u32, capacity: i64, unit_cost: i64) -> ArcId {
+        self.tails.push(tail);
+        self.heads.push(head);
         self.capacities.push(capacity);
         self.unit_costs.push(unit_cost);
         let highest = tail.max(head) as usize;
         if self.supplies.len() <= highest {
             self.supplies.resize(highest + 1, 0);
         }
-        Arc(self.tails.len() - 1)
+        ArcId(self.tails.len() - 1)
     }
 
     /// Sets a node's supply: positive to inject flow, negative to demand it.
@@ -160,9 +206,16 @@ impl MinCostFlow {
     }
 
     /// Solves the problem. Infeasibility and unbalanced supplies are
-    /// outcomes on the returned solution, not errors.
-    pub fn solve(&self) -> Result<MinCostFlowSolution, AlgorithmError> {
-        let num_arcs = self.tails.len();
+    /// outcomes on the returned response, not errors.
+    pub fn solve(&self) -> Result<MinCostFlowResponse, AlgorithmError> {
+        let (tails, heads) = validate_arcs(&self.tails, &self.heads, &self.capacities)?;
+        if i32::try_from(self.supplies.len()).is_err() {
+            return Err(AlgorithmError::InvalidInput(format!(
+                "{} nodes exceed the i32 range",
+                self.supplies.len(),
+            )));
+        }
+        let num_arcs = tails.len();
         let mut flows = vec![0i64; num_arcs];
         let mut total_cost: i64 = 0;
         let mut error_message: *mut c_char = core::ptr::null_mut();
@@ -170,8 +223,8 @@ impl MinCostFlow {
         // referenced by an arc (maintained by add_arc/set_node_supply).
         let status = unsafe {
             oxidor_sys::OxidorMinCostFlowSolve(
-                self.tails.as_ptr(),
-                self.heads.as_ptr(),
+                tails.as_ptr(),
+                heads.as_ptr(),
                 self.capacities.as_ptr(),
                 self.unit_costs.as_ptr(),
                 num_arcs as i32,
@@ -188,17 +241,17 @@ impl MinCostFlow {
             4 => MinCostFlowStatus::Unbalanced,
             // SAFETY: -1 means the shim caught an exception and set the message.
             -1 => {
-                return Err(AlgorithmError::new(unsafe {
+                return Err(AlgorithmError::Native(unsafe {
                     take_error_message(error_message)
                 }));
             }
             other => {
-                return Err(AlgorithmError::new(format!(
+                return Err(AlgorithmError::Native(format!(
                     "SimpleMinCostFlow failed (status {other})",
                 )));
             }
         };
-        Ok(MinCostFlowSolution {
+        Ok(MinCostFlowResponse {
             status,
             total_cost,
             flows,
@@ -218,32 +271,45 @@ pub enum MinCostFlowStatus {
     Unbalanced,
 }
 
-/// The result of a [`MinCostFlow`] solve.
+/// The outcome of a [`MinCostFlow`] solve: a status and — when optimal — a
+/// [`MinCostFlowSolution`].
 #[derive(Debug, Clone)]
-pub struct MinCostFlowSolution {
+pub struct MinCostFlowResponse {
     status: MinCostFlowStatus,
     total_cost: i64,
     flows: Vec<i64>,
 }
 
-impl MinCostFlowSolution {
+impl MinCostFlowResponse {
     /// How the solve ended.
     pub fn status(&self) -> MinCostFlowStatus {
         self.status
     }
 
-    /// Whether an optimal flow was found.
-    pub fn is_optimal(&self) -> bool {
-        self.status == MinCostFlowStatus::Optimal
+    /// The optimal flow, when one was found.
+    pub fn solution(&self) -> Option<MinCostFlowSolution<'_>> {
+        (self.status == MinCostFlowStatus::Optimal).then_some(MinCostFlowSolution {
+            total_cost: self.total_cost,
+            flows: &self.flows,
+        })
     }
+}
 
-    /// The total cost of the flow (0 unless [`is_optimal`](Self::is_optimal)).
+/// An optimal flow, borrowed from a [`MinCostFlowResponse`].
+#[derive(Debug, Clone, Copy)]
+pub struct MinCostFlowSolution<'response> {
+    total_cost: i64,
+    flows: &'response [i64],
+}
+
+impl MinCostFlowSolution<'_> {
+    /// The total cost of the flow.
     pub fn total_cost(&self) -> i64 {
         self.total_cost
     }
 
-    /// The flow assigned to an arc (0 unless [`is_optimal`](Self::is_optimal)).
-    pub fn flow(&self, arc: Arc) -> i64 {
+    /// The flow assigned to an arc.
+    pub fn flow(&self, arc: ArcId) -> i64 {
         self.flows[arc.0]
     }
 }

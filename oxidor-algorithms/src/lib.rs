@@ -20,6 +20,7 @@ mod knapsack;
 
 pub use error::AlgorithmError;
 pub use flow::{
-    Arc, MaxFlow, MaxFlowSolution, MinCostFlow, MinCostFlowSolution, MinCostFlowStatus,
+    ArcId, MaxFlow, MaxFlowSolution, MinCostFlow, MinCostFlowResponse, MinCostFlowSolution,
+    MinCostFlowStatus,
 };
 pub use knapsack::{KnapsackSolution, solve_knapsack, solve_knapsack_multidimensional};
