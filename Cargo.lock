@@ -519,7 +519,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "oxidor"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "oxidor-algorithms",
  "oxidor-cpsat",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "oxidor-algorithms"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "libc",
  "oxidor-sys",
@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "oxidor-cpsat"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "libc",
  "oxidor-protos",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "oxidor-mathopt"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "oxidor-protos",
  "oxidor-sys",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "oxidor-protos"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "oxidor-routing"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "libc",
  "oxidor-protos",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "oxidor-sys"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "cc",
  "flate2",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "prost-build",
  "protox",

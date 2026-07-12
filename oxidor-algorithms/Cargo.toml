@@ -3,12 +3,19 @@ name = "oxidor-algorithms"
 description = "Google OR-Tools classic algorithms for Rust: knapsack, max flow, min cost flow (part of oxidor)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
 oxidor-sys = { workspace = true, features = ["shim"] }
 libc = "0.2"
+
+[package.metadata.docs.rs]
+# The DOCS_RS guard in oxidor-sys's build script makes every feature safe to
+# document without a native library.
+all-features = true

@@ -3,9 +3,11 @@ name = "oxidor-sys"
 description = "Native library linkage and raw FFI for Google OR-Tools (part of oxidor)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 links = "ortools"
@@ -31,3 +33,8 @@ shim = []
 # (its solver registry relies on global initializers a selective static pull
 # drops — see build.rs).
 download-prebuilt = ["dep:ureq", "dep:sha2", "dep:flate2", "dep:tar"]
+
+[package.metadata.docs.rs]
+# The DOCS_RS guard in oxidor-sys's build script makes every feature safe to
+# document without a native library.
+all-features = true

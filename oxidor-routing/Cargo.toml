@@ -3,9 +3,11 @@ name = "oxidor-routing"
 description = "Idiomatic Rust API for Google OR-Tools vehicle routing — TSP/VRP over a distance matrix (part of oxidor)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
@@ -21,3 +23,8 @@ default = ["solve"]
 # C++20 compiler. Without this feature the crate only defines the problem
 # types.
 solve = ["dep:oxidor-sys", "dep:libc"]
+
+[package.metadata.docs.rs]
+# The DOCS_RS guard in oxidor-sys's build script makes every feature safe to
+# document without a native library.
+all-features = true

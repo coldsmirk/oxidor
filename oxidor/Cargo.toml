@@ -3,9 +3,11 @@ name = "oxidor"
 description = "Unofficial Rust bindings for Google OR-Tools — umbrella crate"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
@@ -19,7 +21,7 @@ oxidor-cpsat = { workspace = true, optional = true }
 oxidor-mathopt = { workspace = true, optional = true }
 oxidor-routing = { workspace = true, optional = true }
 oxidor-algorithms = { workspace = true, optional = true }
-# Direct dependency so build.rs receives DEP_ORTOOLS_ROOT for the doctest
+# Direct dependency so build.rs receives DEP_ORTOOLS_LIBDIR for the doctest
 # rpath (the metadata of a `links` crate reaches direct dependents only).
 oxidor-sys = { workspace = true, optional = true }
 
@@ -41,3 +43,8 @@ solve = ["oxidor-cpsat?/solve", "oxidor-mathopt?/solve", "oxidor-routing?/solve"
 # When ORTOOLS_PREFIX is not set, fetch a SHA-256-verified static OR-Tools
 # bundle from this project's GitHub releases instead — zero local setup.
 download-prebuilt = ["solve", "oxidor-sys/download-prebuilt"]
+
+[package.metadata.docs.rs]
+# The DOCS_RS guard in oxidor-sys's build script makes every feature safe to
+# document without a native library.
+all-features = true

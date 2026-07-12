@@ -3,18 +3,20 @@ resolver = "3"
 members = ["oxidor", "oxidor-sys", "oxidor-protos", "oxidor-cpsat", "oxidor-mathopt", "oxidor-routing", "oxidor-algorithms", "xtask"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "Apache-2.0"
 authors = ["Venus"]
 repository = "https://github.com/coldsmirk/oxidor"
+readme = "README.md"
 keywords = ["or-tools", "ortools", "optimization", "cp-sat", "solver"]
 categories = ["mathematics", "science", "api-bindings"]
 
 [workspace.dependencies]
-oxidor-sys = { version = "0.0.1", path = "oxidor-sys" }
-oxidor-protos = { version = "0.0.1", path = "oxidor-protos" }
-oxidor-cpsat = { version = "0.0.1", path = "oxidor-cpsat", default-features = false }
-oxidor-mathopt = { version = "0.0.1", path = "oxidor-mathopt", default-features = false }
-oxidor-routing = { version = "0.0.1", path = "oxidor-routing", default-features = false }
-oxidor-algorithms = { version = "0.0.1", path = "oxidor-algorithms", default-features = false }
+oxidor-sys = { version = "0.1.0", path = "oxidor-sys" }
+oxidor-protos = { version = "0.1.0", path = "oxidor-protos" }
+oxidor-cpsat = { version = "0.1.0", path = "oxidor-cpsat", default-features = false }
+oxidor-mathopt = { version = "0.1.0", path = "oxidor-mathopt", default-features = false }
+oxidor-routing = { version = "0.1.0", path = "oxidor-routing", default-features = false }
+oxidor-algorithms = { version = "0.1.0", path = "oxidor-algorithms", default-features = false }
