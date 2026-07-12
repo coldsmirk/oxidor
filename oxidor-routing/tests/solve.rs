@@ -15,14 +15,14 @@ fn four_city_matrix() -> Vec<Vec<i64>> {
 
 #[test]
 fn solves_a_small_tsp_to_the_known_optimum() {
-    let solution = RoutingProblem::from_matrix(four_city_matrix())
+    let response = RoutingProblem::from_matrix(four_city_matrix())
         .expect("square matrix")
         .solve()
         .expect("solve runs");
 
-    assert_eq!(solution.status(), RoutingStatus::Success);
-    assert!(solution.has_solution());
-    assert_eq!(solution.objective(), 80);
+    assert_eq!(response.status(), RoutingStatus::Success);
+    let solution = response.solution().expect("a tour was found");
+    assert_eq!(solution.objective_value(), 80);
 
     let route = &solution.routes()[0];
     assert_eq!(route.len(), 3, "three cities besides the depot");
@@ -40,14 +40,15 @@ fn solves_a_capacitated_vrp_visiting_every_customer() {
         vec![6, 8, 8, 0, 2],
         vec![6, 8, 8, 2, 0],
     ];
-    let solution = RoutingProblem::from_matrix(matrix)
+    let response = RoutingProblem::from_matrix(matrix)
         .expect("square matrix")
         .with_vehicles(2)
         .with_capacities(vec![0, 1, 1, 1, 1], vec![2, 2])
         .solve()
         .expect("solve runs");
 
-    assert_eq!(solution.status(), RoutingStatus::Success);
+    assert_eq!(response.status(), RoutingStatus::Success);
+    let solution = response.solution().expect("routes were found");
     let mut visited: Vec<usize> = solution.routes().iter().flatten().copied().collect();
     visited.sort_unstable();
     assert_eq!(visited, vec![1, 2, 3, 4], "every customer exactly once");
@@ -55,7 +56,7 @@ fn solves_a_capacitated_vrp_visiting_every_customer() {
         assert!(route.len() <= 2, "capacity 2 per vehicle: {route:?}");
     }
     // Pairing nearby customers (1,2) and (3,4) is optimal: 4+2+4 + 6+2+6 = 24.
-    assert_eq!(solution.objective(), 24);
+    assert_eq!(solution.objective_value(), 24);
 }
 
 #[test]
@@ -67,13 +68,26 @@ fn merges_search_parameters_over_defaults() {
         }),
         ..Default::default()
     };
-    let solution = RoutingProblem::from_matrix(four_city_matrix())
+    let response = RoutingProblem::from_matrix(four_city_matrix())
         .expect("square matrix")
         .solve_with_parameters(&parameters)
         .expect("solve runs");
 
-    assert_eq!(solution.status(), RoutingStatus::Success);
-    assert_eq!(solution.objective(), 80);
+    assert_eq!(response.status(), RoutingStatus::Success);
+    let solution = response.solution().expect("a tour was found");
+    assert_eq!(solution.objective_value(), 80);
+}
+
+#[test]
+fn solve_with_time_limit_still_finds_the_optimum() {
+    let response = RoutingProblem::from_matrix(four_city_matrix())
+        .expect("square matrix")
+        .solve_with_time_limit(std::time::Duration::from_secs(10))
+        .expect("solve runs");
+
+    assert_eq!(response.status(), RoutingStatus::Success);
+    let solution = response.solution().expect("a tour was found");
+    assert_eq!(solution.objective_value(), 80);
 }
 
 #[test]
@@ -86,12 +100,26 @@ fn infeasible_capacities_report_no_solution() {
         vec![1, 1, 1, 0, 1],
         vec![1, 1, 1, 1, 0],
     ];
-    let solution = RoutingProblem::from_matrix(matrix)
+    let response = RoutingProblem::from_matrix(matrix)
         .expect("square matrix")
         .with_capacities(vec![0, 1, 1, 1, 1], vec![1])
         .solve()
         .expect("the solve itself runs");
 
-    assert!(!solution.has_solution());
-    assert_ne!(solution.status(), RoutingStatus::Success);
+    assert!(response.solution().is_none());
+    assert_ne!(response.status(), RoutingStatus::Success);
+}
+
+#[test]
+fn a_single_node_problem_yields_an_empty_route() {
+    let response = RoutingProblem::from_matrix(vec![vec![0]])
+        .expect("square matrix")
+        .solve()
+        .expect("solve runs");
+
+    // The trivial instance is even proven optimal.
+    assert_eq!(response.status(), RoutingStatus::Optimal);
+    let solution = response.solution().expect("the trivial tour exists");
+    assert_eq!(solution.objective_value(), 0);
+    assert_eq!(solution.routes(), &[Vec::<usize>::new()]);
 }

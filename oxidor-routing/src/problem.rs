@@ -1,8 +1,9 @@
 /// A failure to define or run a routing solve.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RoutingError {
     /// The problem definition is inconsistent (non-square matrix, depot out
-    /// of range, mismatched demand/capacity lengths, …).
+    /// of range, mismatched demand/capacity lengths, negative costs, …).
     InvalidProblem(String),
     /// The native layer reported an error (message from the C++ side).
     Native(String),
@@ -33,11 +34,14 @@ impl std::error::Error for RoutingError {}
 ///     vec![15, 35, 0, 30],
 ///     vec![20, 25, 30, 0],
 /// ];
-/// let solution = RoutingProblem::from_matrix(matrix)?.solve()?;
-/// println!("tour cost {}: {:?}", solution.objective(), solution.routes());
+/// let response = RoutingProblem::from_matrix(matrix)?.solve()?;
+/// let tour = response.solution().expect("a tour was found");
+/// println!("tour cost {}: {:?}", tour.objective_value(), tour.routes()[0]);
 /// # Ok::<(), oxidor_routing::RoutingError>(())
 /// ```
 #[derive(Debug, Clone)]
+// Some fields are only read by the solve module (`solve` feature).
+#[cfg_attr(not(feature = "solve"), allow(dead_code))]
 pub struct RoutingProblem {
     pub(crate) matrix: Vec<i64>,
     pub(crate) num_nodes: usize,
@@ -48,8 +52,9 @@ pub struct RoutingProblem {
 }
 
 impl RoutingProblem {
-    /// A problem over the given square arc-cost matrix (`matrix[from][to]`),
-    /// with one vehicle based at node 0 until configured otherwise.
+    /// A problem over the given square arc-cost matrix (`matrix[from][to]`,
+    /// non-negative costs), with one vehicle based at node 0 until configured
+    /// otherwise.
     pub fn from_matrix(matrix: Vec<Vec<i64>>) -> Result<Self, RoutingError> {
         let num_nodes = matrix.len();
         if num_nodes == 0 {
@@ -61,6 +66,11 @@ impl RoutingProblem {
                 return Err(RoutingError::InvalidProblem(format!(
                     "matrix row {index} has {} entries, expected {num_nodes}",
                     row.len(),
+                )));
+            }
+            if let Some(cost) = row.iter().find(|&&cost| cost < 0) {
+                return Err(RoutingError::InvalidProblem(format!(
+                    "matrix row {index} contains the negative cost {cost}",
                 )));
             }
             flat.extend_from_slice(row);
@@ -89,12 +99,15 @@ impl RoutingProblem {
 
     /// Adds a capacity dimension: `demands[node]` units are picked up at each
     /// visited node, and vehicle `v` carries at most `vehicle_capacities[v]`.
+    /// Both must be non-negative.
     pub fn with_capacities(mut self, demands: Vec<i64>, vehicle_capacities: Vec<i64>) -> Self {
         self.demands = Some(demands);
         self.vehicle_capacities = Some(vehicle_capacities);
         self
     }
 
+    // Called by the solve module (`solve` feature) and by unit tests.
+    #[cfg_attr(not(any(feature = "solve", test)), allow(dead_code))]
     pub(crate) fn validate(&self) -> Result<(), RoutingError> {
         if self.num_vehicles == 0 {
             return Err(RoutingError::InvalidProblem("no vehicles".into()));
@@ -113,6 +126,11 @@ impl RoutingProblem {
                     self.num_nodes,
                 )));
             }
+            if let Some(demand) = demands.iter().find(|&&demand| demand < 0) {
+                return Err(RoutingError::InvalidProblem(format!(
+                    "negative demand {demand}",
+                )));
+            }
             let capacities = self
                 .vehicle_capacities
                 .as_ref()
@@ -122,6 +140,13 @@ impl RoutingProblem {
                     "{} vehicle capacities for {} vehicles",
                     capacities.len(),
                     self.num_vehicles,
+                )));
+            }
+            // Upstream CHECK-aborts the whole process on a negative capacity;
+            // reject it here, where it can be an ordinary error.
+            if let Some(capacity) = capacities.iter().find(|&&capacity| capacity < 0) {
+                return Err(RoutingError::InvalidProblem(format!(
+                    "negative vehicle capacity {capacity}",
                 )));
             }
         }
@@ -147,6 +172,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_an_empty_matrix() {
+        let error = RoutingProblem::from_matrix(vec![]).unwrap_err();
+        assert!(matches!(error, RoutingError::InvalidProblem(_)));
+    }
+
+    #[test]
+    fn rejects_negative_costs() {
+        let error = RoutingProblem::from_matrix(vec![vec![0, -5], vec![1, 0]]).unwrap_err();
+        assert!(matches!(error, RoutingError::InvalidProblem(_)));
+    }
+
+    #[test]
     fn rejects_an_out_of_range_depot() {
         let problem = RoutingProblem::from_matrix(vec![vec![0, 1], vec![1, 0]])
             .unwrap()
@@ -158,10 +195,45 @@ mod tests {
     }
 
     #[test]
+    fn rejects_zero_vehicles() {
+        let problem = RoutingProblem::from_matrix(vec![vec![0, 1], vec![1, 0]])
+            .unwrap()
+            .with_vehicles(0);
+        assert!(matches!(
+            problem.validate(),
+            Err(RoutingError::InvalidProblem(_))
+        ));
+    }
+
+    #[test]
     fn rejects_mismatched_capacity_lengths() {
         let problem = RoutingProblem::from_matrix(vec![vec![0, 1], vec![1, 0]])
             .unwrap()
             .with_capacities(vec![1], vec![10]);
+        assert!(matches!(
+            problem.validate(),
+            Err(RoutingError::InvalidProblem(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_a_negative_vehicle_capacity() {
+        // Upstream would CHECK-abort the process on this; it must be caught
+        // before the FFI boundary.
+        let problem = RoutingProblem::from_matrix(vec![vec![0, 1], vec![1, 0]])
+            .unwrap()
+            .with_capacities(vec![0, 1], vec![-2]);
+        assert!(matches!(
+            problem.validate(),
+            Err(RoutingError::InvalidProblem(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_a_negative_demand() {
+        let problem = RoutingProblem::from_matrix(vec![vec![0, 1], vec![1, 0]])
+            .unwrap()
+            .with_capacities(vec![0, -1], vec![2]);
         assert!(matches!(
             problem.validate(),
             Err(RoutingError::InvalidProblem(_))

@@ -20,8 +20,9 @@
 //!     vec![15, 35, 0, 30],
 //!     vec![20, 25, 30, 0],
 //! ];
-//! let solution = RoutingProblem::from_matrix(matrix)?.solve()?;
-//! println!("tour cost {}: {:?}", solution.objective(), solution.routes()[0]);
+//! let response = RoutingProblem::from_matrix(matrix)?.solve()?;
+//! let tour = response.solution().expect("a tour was found");
+//! println!("tour cost {}: {:?}", tour.objective_value(), tour.routes()[0]);
 //! # Ok::<(), oxidor_routing::RoutingError>(())
 //! ```
 //!
@@ -30,7 +31,7 @@
 //! ```no_run
 //! # use oxidor_routing::RoutingProblem;
 //! # let matrix = vec![vec![0; 5]; 5];
-//! let solution = RoutingProblem::from_matrix(matrix)?
+//! let response = RoutingProblem::from_matrix(matrix)?
 //!     .with_vehicles(2)
 //!     .with_capacities(vec![0, 1, 1, 1, 1], vec![2, 2])
 //!     .solve()?;
@@ -51,7 +52,7 @@ mod solve;
 
 pub use problem::{RoutingError, RoutingProblem};
 #[cfg(feature = "solve")]
-pub use solve::{RoutingSolution, RoutingStatus};
+pub use solve::{RoutingResponse, RoutingSolution, RoutingStatus};
 
 /// The generated OR-Tools proto types this API builds on.
 pub use oxidor_protos as protos;

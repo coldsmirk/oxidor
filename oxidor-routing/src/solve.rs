@@ -1,4 +1,5 @@
 use core::ffi::{CStr, c_char};
+use std::time::Duration;
 
 use oxidor_protos::operations_research::RoutingSearchParameters;
 use oxidor_protos::operations_research::routing_search_status::Value as StatusProto;
@@ -8,8 +9,30 @@ use crate::problem::{RoutingError, RoutingProblem};
 
 impl RoutingProblem {
     /// Solves with default search parameters.
-    pub fn solve(&self) -> Result<RoutingSolution, RoutingError> {
+    pub fn solve(&self) -> Result<RoutingResponse, RoutingError> {
         self.solve_with_parameters(&RoutingSearchParameters::default())
+    }
+
+    /// Solves with the local search capped at `limit`, returning the best
+    /// routes found by then.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// # let problem = oxidor_routing::RoutingProblem::from_matrix(vec![vec![0]])?;
+    /// let response = problem.solve_with_time_limit(Duration::from_secs(10))?;
+    /// # Ok::<(), oxidor_routing::RoutingError>(())
+    /// ```
+    ///
+    /// For any other tuning knob, reach for
+    /// [`solve_with_parameters`](Self::solve_with_parameters).
+    pub fn solve_with_time_limit(&self, limit: Duration) -> Result<RoutingResponse, RoutingError> {
+        self.solve_with_parameters(&RoutingSearchParameters {
+            time_limit: Some(oxidor_protos::prost_types::Duration {
+                seconds: limit.as_secs() as i64,
+                nanos: limit.subsec_nanos() as i32,
+            }),
+            ..Default::default()
+        })
     }
 
     /// Solves with the given `RoutingSearchParameters` (time limits, first
@@ -24,15 +47,18 @@ impl RoutingProblem {
     ///     time_limit: Some(Duration { seconds: 10, nanos: 0 }),
     ///     ..Default::default()
     /// };
-    /// let solution = problem.solve_with_parameters(&parameters)?;
+    /// let response = problem.solve_with_parameters(&parameters)?;
     /// # Ok::<(), oxidor_routing::RoutingError>(())
     /// ```
     pub fn solve_with_parameters(
         &self,
         parameters: &RoutingSearchParameters,
-    ) -> Result<RoutingSolution, RoutingError> {
+    ) -> Result<RoutingResponse, RoutingError> {
         self.validate()?;
         let parameter_bytes = parameters.encode_to_vec();
+        let parameter_length = i32::try_from(parameter_bytes.len()).map_err(|_| {
+            RoutingError::InvalidProblem("serialized search parameters exceed 2 GiB".into())
+        })?;
 
         let mut out_len: i32 = 0;
         let mut error_message: *mut c_char = core::ptr::null_mut();
@@ -52,7 +78,7 @@ impl RoutingProblem {
                     .as_ref()
                     .map_or(core::ptr::null(), |capacities| capacities.as_ptr()),
                 parameter_bytes.as_ptr().cast(),
-                parameter_bytes.len() as i32,
+                parameter_length,
                 &mut out_len,
                 &mut error_message,
             )
@@ -79,13 +105,13 @@ impl RoutingProblem {
             unsafe { core::slice::from_raw_parts(buffer_pointer, out_len as usize) }.to_vec();
         unsafe { libc::free(buffer_pointer.cast()) };
 
-        Ok(parse_solution_buffer(&buffer))
+        Ok(parse_response_buffer(&buffer))
     }
 }
 
 /// Decodes the shim's flat buffer:
 /// `[status, objective, num_routes, route_len, nodes…, route_len, …]`.
-fn parse_solution_buffer(buffer: &[i64]) -> RoutingSolution {
+fn parse_response_buffer(buffer: &[i64]) -> RoutingResponse {
     let status = match StatusProto::try_from(buffer[0] as i32) {
         Ok(StatusProto::RoutingNotSolved) => RoutingStatus::NotSolved,
         Ok(StatusProto::RoutingSuccess) => RoutingStatus::Success,
@@ -97,6 +123,7 @@ fn parse_solution_buffer(buffer: &[i64]) -> RoutingSolution {
         Ok(StatusProto::RoutingInvalid) => RoutingStatus::Invalid,
         Ok(StatusProto::RoutingInfeasible) => RoutingStatus::Infeasible,
         Ok(StatusProto::RoutingOptimal) => RoutingStatus::Optimal,
+        // A status this crate predates; the safe reading is "nothing solved".
         Err(_) => RoutingStatus::NotSolved,
     };
     let objective = buffer[1];
@@ -114,42 +141,55 @@ fn parse_solution_buffer(buffer: &[i64]) -> RoutingSolution {
         );
         cursor += length;
     }
-    RoutingSolution {
+    RoutingResponse {
         status,
         objective,
         routes,
     }
 }
 
-/// The outcome of a routing solve.
+/// The outcome of a routing solve: a status and — when the search found
+/// routes — a [`RoutingSolution`].
 #[derive(Debug, Clone)]
-pub struct RoutingSolution {
+pub struct RoutingResponse {
     status: RoutingStatus,
     objective: i64,
     routes: Vec<Vec<usize>>,
 }
 
-impl RoutingSolution {
+impl RoutingResponse {
     /// How the search ended.
     pub fn status(&self) -> RoutingStatus {
         self.status
     }
 
-    /// Whether a set of routes was found.
-    pub fn has_solution(&self) -> bool {
-        !self.routes.is_empty()
+    /// The routes, when the search found any.
+    pub fn solution(&self) -> Option<RoutingSolution<'_>> {
+        (!self.routes.is_empty()).then_some(RoutingSolution {
+            objective: self.objective,
+            routes: &self.routes,
+        })
     }
+}
 
-    /// The total cost of the routes (0 when no solution was found).
-    pub fn objective(&self) -> i64 {
+/// A set of routes found by a solve, borrowed from a [`RoutingResponse`].
+#[derive(Debug, Clone, Copy)]
+pub struct RoutingSolution<'response> {
+    objective: i64,
+    routes: &'response [Vec<usize>],
+}
+
+impl RoutingSolution<'_> {
+    /// The total cost of the routes.
+    pub fn objective_value(&self) -> i64 {
         self.objective
     }
 
     /// One route per vehicle: the nodes visited in order, excluding the
     /// depot at both ends (upstream `AssignmentToRoutes` semantics). Unused
-    /// vehicles yield empty routes; empty when no solution was found.
+    /// vehicles yield empty routes.
     pub fn routes(&self) -> &[Vec<usize>] {
-        &self.routes
+        self.routes
     }
 }
 
